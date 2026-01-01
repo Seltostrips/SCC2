@@ -4,13 +4,10 @@ const Inventory = require('../models/Inventory');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. GET UNIQUE CODES (Used by Staff Dashboard dropdown)
-// Matches axios.get('/api/inventory/unique-codes')
+// 1. GET UNIQUE CODES (For Staff Dropdown)
 router.get('/unique-codes', auth, async (req, res) => {
   try {
-    // Return clients with their code and location
-    const clients = await User.find({ role: 'client' })
-      .select('company uniqueCode location');
+    const clients = await User.find({ role: 'client' }).select('company uniqueCode location');
     res.json(clients);
   } catch (err) {
     console.error('Error fetching unique codes:', err);
@@ -18,66 +15,69 @@ router.get('/unique-codes', auth, async (req, res) => {
   }
 });
 
-// 2. GET PENDING ENTRIES (Used by Client Dashboard)
-// Matches axios.get('/api/inventory/pending')
+// 2. GET PENDING ENTRIES (For CLIENTS ONLY)
 router.get('/pending', auth, async (req, res) => {
   try {
-    // SCENARIO A: CLIENT LOGGED IN
-    // Find items matching their uniqueCode
-    if (req.user.role === 'client') {
-      const clientUser = await User.findById(req.user.id);
-      
-      if (!clientUser || !clientUser.uniqueCode) {
-        return res.status(400).json({ message: 'Client profile incomplete' });
-      }
-
-      const pendingItems = await Inventory.find({
-        status: 'pending-client',
-        uniqueCode: clientUser.uniqueCode 
-      })
-      .populate('staffId', 'name') // Show staff name
-      .sort({ 'timestamps.staffEntry': -1 });
-      
-      return res.json(pendingItems);
-    }
-    
-    // SCENARIO B: STAFF LOGGED IN (Optional)
-    // Show items they submitted that are still pending
-    if (req.user.role === 'staff') {
-       const myPending = await Inventory.find({
-         status: 'pending-client',
-         staffId: req.user.id
-       }).sort({ 'timestamps.staffEntry': -1 });
-       return res.json(myPending);
+    if (req.user.role !== 'client') {
+      return res.status(403).json({ message: 'Access denied. Clients only.' });
     }
 
-    res.json([]);
+    const clientUser = await User.findById(req.user.id);
+    if (!clientUser || !clientUser.uniqueCode) {
+      return res.status(400).json({ message: 'Client profile incomplete (missing Unique Code)' });
+    }
+
+    console.log(`Fetching pending items for Client Code: "${clientUser.uniqueCode}"`);
+
+    const pendingItems = await Inventory.find({
+      status: 'pending-client',
+      uniqueCode: clientUser.uniqueCode 
+    })
+    .populate('staffId', 'name')
+    .sort({ 'timestamps.staffEntry': -1 });
+
+    console.log(`Found ${pendingItems.length} pending items.`);
+    res.json(pendingItems);
   } catch (err) {
     console.error('Error fetching pending:', err);
     res.status(500).send('Server Error');
   }
 });
 
-// 3. SUBMIT INVENTORY (Used by Staff Dashboard)
-// Matches axios.post('/api/inventory', formData)
+// 3. GET STAFF HISTORY (New Route for the 3 Sections)
+router.get('/staff-history', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'staff') {
+      return res.status(403).json({ message: 'Access denied. Staff only.' });
+    }
+
+    // Fetch all entries by this staff member
+    const entries = await Inventory.find({ staffId: req.user.id })
+      .sort({ 'timestamps.staffEntry': -1 });
+
+    res.json(entries);
+  } catch (err) {
+    console.error('Error fetching staff history:', err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// 4. SUBMIT INVENTORY (For Staff)
 router.post('/', auth, async (req, res) => {
   try {
-    // Correctly destructure what the Frontend ACTUALLY sends
     const { 
       binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode 
     } = req.body;
 
-    console.log('Submitting Inventory:', binId, uniqueCode);
+    console.log(`Submitting: Bin ${binId} for Client ${uniqueCode}`);
 
-    // Calculate Discrepancy
     const discrepancy = Math.abs(bookQuantity - actualQuantity);
 
     // Determine Status
-    // If perfect match, auto-approve. If mismatch, send to client.
     let status = 'auto-approved';
     if (discrepancy > 0) status = 'pending-client';
 
-    // Find the client Object ID based on uniqueCode (to link relationships)
+    // Link Client ID if possible
     const clientUser = await User.findOne({ uniqueCode });
 
     const newEntry = new Inventory({
@@ -106,17 +106,16 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// 4. RESPOND TO ENTRY (Used by Client Dashboard)
-// Matches axios.post('/api/inventory/:id/respond')
+// 5. RESPOND TO ENTRY (For Clients)
 router.post('/:id/respond', auth, async (req, res) => {
   try {
-    const { action, comment } = req.body; // action: 'approved' | 'rejected'
+    const { action, comment } = req.body; 
     const entryId = req.params.id;
 
     const entry = await Inventory.findById(entryId);
     if (!entry) return res.status(404).json({ message: 'Entry not found' });
 
-    // Security Check: Verify this entry belongs to the requesting client
+    // Verify ownership
     const clientUser = await User.findById(req.user.id);
     if (entry.uniqueCode !== clientUser.uniqueCode) {
         return res.status(403).json({ message: 'Not authorized for this entry' });
@@ -130,11 +129,7 @@ router.post('/:id/respond', auth, async (req, res) => {
         return res.status(400).json({ message: 'Invalid action' });
     }
 
-    // Update Response Details
-    entry.clientResponse = {
-        action,
-        comment
-    };
+    entry.clientResponse = { action, comment };
     entry.timestamps.clientResponse = new Date();
     entry.timestamps.finalStatus = new Date();
 
