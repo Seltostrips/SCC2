@@ -6,16 +6,36 @@ import withAuth from '../../components/withAuth';
 function AdminDashboard() {
   const [uploadType, setUploadType] = useState('inventory'); // inventory, staff, client
 
-  const handleFileUpload = (e) => {
+ const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      // We removed the forced delimiter so it auto-detects , or ;
       complete: async (results) => {
+        console.log("Parsed Data:", results.data); 
+        
+        // Validation: Check if the file parsed correctly
+        if (results.data.length === 0) {
+           alert('CSV Error: File appears empty.');
+           return;
+        }
+
+        // Check if SKU ID exists (handles different variations of header names if needed)
+        const firstRow = results.data[0];
+        if (!firstRow['SKU ID']) {
+          alert(`CSV Error: Could not find "SKU ID" column. \n\nDetected Headers: ${Object.keys(firstRow).join(', ')}`);
+          return;
+        }
+
         const data = results.data;
         processData(data);
+      },
+      error: (error) => {
+        console.error('CSV Parse Error:', error);
+        alert('Failed to parse CSV file. Please check the file format.');
       }
     });
   };
@@ -87,3 +107,4 @@ function AdminDashboard() {
 }
 
 export default withAuth(AdminDashboard, 'admin');
+
