@@ -79,10 +79,26 @@ function AdminDashboard() {
     });
   };
 
-  const processUpload = async (data) => {
+// Helper to remove invisible characters/spaces from CSV headers
+  const cleanKeys = (data) => {
+    return data.map(row => {
+      const newRow = {};
+      Object.keys(row).forEach(key => {
+        const cleanKey = key.trim().replace(/^\ufeff/, ''); // Remove BOM & spaces
+        newRow[cleanKey] = row[key];
+      });
+      return newRow;
+    });
+  };
+
+  const processUpload = async (rawData) => {
     try {
       const token = localStorage.getItem('token');
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      
+      // 1. Clean the data headers
+      const data = cleanKeys(rawData);
+      
       let endpoint = '';
       let payload = [];
 
@@ -94,30 +110,43 @@ function AdminDashboard() {
           pickingLocation: row['Picking Location'],
           bulkLocation: row['Bulk Location'],
           systemQuantity: Number(row['Quantity as on the date of Sampling'] || 0)
-        }));
-      } else if (uploadType === 'staff') {
+        })).filter(item => item.skuId); // Filter out empty rows
+      } 
+      else if (uploadType === 'staff') {
         endpoint = `${baseUrl}/api/admin/assign-staff`;
         payload = data.map(row => ({
-          sccId: row['Staff ID'],
+          sccId: row['Staff ID'], // Ensure this matches your CSV Header
           pin: row['Login PIN'],
           name: row['Name'],
-          assignedLocations: [row['Location1'], row['Location2'], row['Location3'], row['Location4'], row['Location5'], row['Location6']].filter(Boolean)
-        }));
-      } else if (uploadType === 'client') {
+          assignedLocations: [
+            row['Location1'], row['Location2'], row['Location3'], 
+            row['Location4'], row['Location5'], row['Location6']
+          ].filter(Boolean)
+        })).filter(u => u.sccId && u.pin); // Only send valid users
+      } 
+      else if (uploadType === 'client') {
         endpoint = `${baseUrl}/api/admin/assign-client`;
         payload = data.map(row => ({
           sccId: row['Staff ID'],
           pin: row['Login PIN'],
           name: row['Name'],
           mappedLocation: row['Location']
-        }));
+        })).filter(u => u.sccId && u.pin);
+      }
+
+      console.log(`Uploading ${uploadType} payload:`, payload); // Debugging
+
+      if (payload.length === 0) {
+        alert('Error: No valid data found. Check your CSV headers.');
+        return;
       }
 
       await axios.post(endpoint, payload, { headers: { Authorization: `Bearer ${token}` } });
       alert('Upload Successful!');
-      fetchData(); // Refresh data
+      fetchData(); 
     } catch (err) {
-      alert('Upload Failed');
+      console.error(err);
+      alert('Upload Failed: ' + (err.response?.data?.message || err.message));
     }
   };
 
@@ -274,3 +303,4 @@ function AdminDashboard() {
 }
 
 export default withAuth(AdminDashboard, 'admin');
+
