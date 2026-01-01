@@ -1,29 +1,74 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import Papa from 'papaparse'; // Ensure you have this: npm install papaparse
+import Papa from 'papaparse';
 import withAuth from '../../components/withAuth';
 
 function AdminDashboard() {
+  const [activeTab, setActiveTab] = useState('monitor'); // 'monitor', 'users', 'upload'
+  const [inventory, setInventory] = useState([]);
   const [users, setUsers] = useState([]);
+  
+  // Upload State
+  const [uploadType, setUploadType] = useState('inventory'); // 'inventory', 'staff', 'client'
   const [uploadStatus, setUploadStatus] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // -- DATA FETCHING --
   useEffect(() => {
-    fetchUsers();
-  }, []);
+    fetchData();
+  }, [activeTab]);
 
-  const fetchUsers = async () => {
+  const fetchData = async () => {
+    const token = localStorage.getItem('token');
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
+    
     try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get('/api/auth/users', { // You might need to create this route or use existing
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setUsers(res.data);
+      if (activeTab === 'monitor') {
+        // Fetch All Inventory Submissions
+        const res = await axios.get(`${baseUrl}/api/admin/inventory-all`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setInventory(res.data);
+      } else if (activeTab === 'users') {
+        // Fetch All Users
+        const res = await axios.get(`${baseUrl}/api/auth/users`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setUsers(res.data);
+      }
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching data", err);
     }
   };
 
+  // -- TEMPLATE DOWNLOAD LOGIC --
+  const handleDownloadTemplate = () => {
+    let headers = [];
+    let filename = '';
+
+    if (uploadType === 'inventory') {
+      headers = ['SKU ID', 'Name of the SKU ID', 'Picking Location', 'Bulk Location', 'Quantity as on the date of Sampling'];
+      filename = 'inventory_template.csv';
+    } else if (uploadType === 'staff') {
+      headers = ['Staff ID', 'Login PIN', 'Name', 'Location1', 'Location2', 'Location3', 'Location4', 'Location5', 'Location6'];
+      filename = 'staff_template.csv';
+    } else if (uploadType === 'client') {
+      // Client CSV structure usually matches Staff but role differs
+      headers = ['Staff ID', 'Login PIN', 'Name', 'Location1', 'Location2', 'Location3', 'Location4', 'Location5', 'Location6'];
+      filename = 'client_template.csv';
+    }
+
+    const csvContent = headers.join(',');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // -- FILE UPLOAD LOGIC --
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -35,112 +80,81 @@ function AdminDashboard() {
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
-        setUploadStatus(`Uploading ${results.data.length} users...`);
+        if (results.data.length === 0) {
+          setLoading(false);
+          return alert('File empty');
+        }
+
+        const token = localStorage.getItem('token');
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
         let successCount = 0;
         let failCount = 0;
 
-        const token = localStorage.getItem('token');
-
-        for (const row of results.data) {
-          try {
-            // --- CSV MAPPING LOGIC ---
-            // Extract Locations from Location1, Location2, etc.
-            const locArray = [];
-            for (let i = 1; i <= 6; i++) {
-              if (row[`Location${i}`] && row[`Location${i}`].trim()) {
-                locArray.push(row[`Location${i}`].trim());
-              }
-            }
-
-            // Construct Payload matching User.js Schema
-            const payload = {
-              name: row['Name'],
-              uniqueCode: row['Staff ID'] || row['Client ID'], // Handles both column names
-              loginPin: row['Login PIN'],
-              role: row['Role'] ? row['Role'].toLowerCase() : 'staff', // Default to staff if missing
-              locations: locArray,
-              mappedLocation: locArray.join(', ') // Legacy string support
-            };
-            
-            // Send to Register Route
-            await axios.post('/api/auth/register', payload, {
-               headers: { Authorization: `Bearer ${token}` }
-            });
-            successCount++;
-          } catch (err) {
-            console.error(`Failed to upload ${row['Name']}:`, err);
-            failCount++;
+        // --- SCENARIO A: REFERENCE INVENTORY UPLOAD ---
+        if (uploadType === 'inventory') {
+          // Validate Headers
+          const firstRow = results.data[0];
+          if (!firstRow['SKU ID']) {
+             setLoading(false);
+             return alert('Error: CSV must have "SKU ID" column.');
           }
-        }
+
+          // Process in Batches or One-by-One
+          for (const row of results.data) {
+             try {
+                // Map CSV headers to Mongoose Schema
+                const payload = {
+                   skuId: row['SKU ID'],
+                   name: row['Name of the SKU ID'],
+                   pickingLocation: row['Picking Location'],
+                   bulkLocation: row['Bulk Location'],
+                   systemQuantity: parseFloat(row['Quantity as on the date of Sampling']) || 0
+                };
+
+                await axios.post(`${baseUrl}/api/admin/upload-inventory`, payload, {
+                   headers: { Authorization: `Bearer ${token}` }
+                });
+                successCount++;
+             } catch (err) {
+                console.error('Failed row:', row);
+                failCount++;
+             }
+          }
+        } 
         
-        setLoading(false);
-        setUploadStatus(`Complete! Success: ${successCount}, Failed: ${failCount}`);
-        fetchUsers();
-      }
-    });
-  };
+        // --- SCENARIO B: STAFF / CLIENT UPLOAD ---
+        else {
+           // Validate Headers
+           const firstRow = results.data[0];
+           if (!firstRow['Staff ID'] && !firstRow['Client ID']) {
+              setLoading(false);
+              return alert('Error: CSV must have "Staff ID" (or Client ID) column.');
+           }
 
-  return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-8">Admin Dashboard</h1>
-        
-        {/* CSV UPLOAD SECTION */}
-        <div className="bg-white p-6 rounded-lg shadow mb-8">
-          <h2 className="text-xl font-bold mb-4">Bulk Upload Staff/Clients</h2>
-          
-          <div className="mb-4 bg-blue-50 p-4 rounded text-sm text-blue-800">
-            <p className="font-bold">Required CSV Headers:</p>
-            <p className="font-mono mt-1">Staff ID, Login PIN, Name, Role, Location1, Location2, Location3, Location4, Location5, Location6</p>
-            <p className="mt-2 text-xs">* Role should be "staff" or "client". Locations are optional (leave blank if unused).</p>
-          </div>
+           for (const row of results.data) {
+             try {
+               // Extract Locations from Location1...Location6
+               const locArray = [];
+               for (let i = 1; i <= 6; i++) {
+                 if (row[`Location${i}`] && row[`Location${i}`].trim()) {
+                   locArray.push(row[`Location${i}`].trim());
+                 }
+               }
 
-          <div className="flex items-center gap-4">
-            <input 
-              type="file" 
-              accept=".csv"
-              onChange={handleFileUpload}
-              disabled={loading}
-              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-            />
-            {loading && <span className="font-bold text-indigo-600">{uploadStatus}</span>}
-          </div>
-          {!loading && uploadStatus && <p className="mt-2 text-green-600 font-medium">{uploadStatus}</p>}
-        </div>
+               // Map CSV to User Schema
+               const payload = {
+                 name: row['Name'],
+                 uniqueCode: row['Staff ID'] || row['Client ID'],
+                 loginPin: row['Login PIN'],
+                 role: uploadType, // 'staff' or 'client'
+                 locations: locArray,
+                 mappedLocation: locArray.join(', ') // Legacy support
+               };
 
-        {/* USER LIST (Optional Preview) */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-bold mb-4">System Users</h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="p-3">Name</th>
-                  <th className="p-3">Code (ID)</th>
-                  <th className="p-3">Role</th>
-                  <th className="p-3">Locations</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u._id} className="border-t hover:bg-gray-50">
-                    <td className="p-3 font-medium">{u.name}</td>
-                    <td className="p-3 font-mono">{u.uniqueCode}</td>
-                    <td className="p-3 capitalize">{u.role}</td>
-                    <td className="p-3">
-                       {u.locations && u.locations.length > 0 
-                         ? u.locations.map(l => <span key={l} className="inline-block bg-gray-200 px-2 py-1 rounded text-xs mr-1">{l}</span>) 
-                         : <span className="text-gray-400">None</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default withAuth(AdminDashboard, 'admin');
+               await axios.post(`${baseUrl}/api/auth/register`, payload, {
+                  headers: { Authorization: `Bearer ${token}` }
+               });
+               successCount++;
+             } catch (err) {
+               console.error(`Failed to upload ${row['Name']}:`, err);
+               failCount
