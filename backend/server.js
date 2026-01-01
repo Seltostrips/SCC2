@@ -20,7 +20,7 @@ const io = socketIo(server, {
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Increased limit for large CSV uploads
 
 // Basic route for testing
 app.get('/', (req, res) => {
@@ -34,7 +34,7 @@ connectDB();
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/health', require('./routes/health'));
-app.use('/api/admin', require('./routes/admin'));
+app.use('/api/admin', require('./routes/admin')); // <--- THIS WAS MISSING
 
 // Socket.io setup
 io.on('connection', (socket) => {
@@ -55,4 +55,3 @@ app.set('io', io);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
