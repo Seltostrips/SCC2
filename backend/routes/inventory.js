@@ -8,10 +8,9 @@ const auth = require('../middleware/auth');
 // 1. ROBUST LOOKUP (Unchanged)
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
-    const rawSku = req.params.skuId;
-    const cleanSku = rawSku.trim(); 
-    
+    const cleanSku = req.params.skuId.trim();
     let item = await ReferenceInventory.findOne({ skuId: cleanSku });
+    
     if (!item && !isNaN(cleanSku)) {
        item = await ReferenceInventory.findOne({ skuId: Number(cleanSku) });
     }
@@ -29,23 +28,25 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (UPDATED)
-// Matches clients where their mappedLocation CONTAINS the search term
+// 2. GET CLIENTS BY LOCATION (UPDATED for Multi-Location)
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
     if (!location) return res.json([]);
 
-    console.log(`Searching for clients in: "${location}"`);
+    console.log(`Searching for clients mapped to: "${location}"`);
 
+    // Find clients where:
+    // 1. Their 'locations' array contains the search location
+    // 2. OR their 'mappedLocation' string matches (legacy support)
     const clients = await User.find({ 
         role: 'client', 
-        // Case-insensitive "Contains" search
-        // This ensures if User has "Noida WH, Delhi" and staff types "Noida", it matches.
-        mappedLocation: { $regex: location, $options: 'i' } 
-    }).select('name company uniqueCode mappedLocation');
+        $or: [
+            { locations: location }, // Exact match in array
+            { mappedLocation: { $regex: location, $options: 'i' } } // Fuzzy string match
+        ]
+    }).select('name company uniqueCode locations mappedLocation');
     
-    console.log(`Found ${clients.length} clients.`);
     res.json(clients);
   } catch (err) {
     console.error(err);
@@ -72,9 +73,7 @@ router.get('/pending', auth, async (req, res) => {
     if (req.user.role === 'client') {
       query.assignedClientId = req.user.id;
     }
-    const entries = await Inventory.find(query)
-      .populate('staffId', 'name')
-      .sort({ 'timestamps.staffEntry': -1 });
+    const entries = await Inventory.find(query).populate('staffId', 'name').sort({ 'timestamps.staffEntry': -1 });
     res.json(entries);
   } catch (err) {
     console.error(err);
@@ -85,16 +84,12 @@ router.get('/pending', auth, async (req, res) => {
 // 5. SUBMIT INVENTORY (Unchanged)
 router.post('/', auth, async (req, res) => {
   try {
-    const { 
-      skuId, skuName, location, counts, odin, assignedClientId, notes
-    } = req.body;
+    const { skuId, skuName, location, counts, odin, assignedClientId, notes } = req.body;
 
-    // Calculate Total Identified
     const totalIdentified = 
-        (Number(counts.picking) || 0) + (Number(counts.bulk) || 0) + (Number(counts.nearExpiry) || 0) + 
-        (Number(counts.jit) || 0) + (Number(counts.damaged) || 0);
-        
-    const maxSystemQty = (Number(odin.minQuantity) || 0) + (Number(odin.blocked) || 0);
+        (Number(counts.picking)||0) + (Number(counts.bulk)||0) + (Number(counts.nearExpiry)||0) + 
+        (Number(counts.jit)||0) + (Number(counts.damaged)||0);
+    const maxSystemQty = (Number(odin.minQuantity)||0) + (Number(odin.blocked)||0);
 
     let auditResult = 'Match';
     if (totalIdentified > maxSystemQty) auditResult = 'Excess';
