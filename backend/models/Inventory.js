@@ -30,5 +30,6 @@ const UserSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('Inventory', InventorySchema);
+module.exports = mongoose.models.Inventory || mongoose.model('Inventory', InventorySchema);
+
 
