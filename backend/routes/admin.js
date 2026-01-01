@@ -44,38 +44,74 @@ router.post('/upload-inventory', auth, async (req, res) => {
   }
 });
 
+// ... existing imports
+
+// Upload Staff Assignments
 router.post('/assign-staff', auth, async (req, res) => {
   try {
     const users = req.body;
+    if (!Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ message: 'No user data provided' });
+    }
+
     const operations = users.map(u => ({
       updateOne: {
         filter: { sccId: u.sccId },
-        update: { $set: { name: u.name, pin: u.pin, role: 'staff', assignedLocations: u.assignedLocations } },
+        update: { 
+          $set: { 
+            name: u.name, 
+            pin: u.pin, 
+            role: 'staff', 
+            assignedLocations: u.assignedLocations,
+            isApproved: true // <--- CRITICAL: Ensure they can login
+          } 
+        },
         upsert: true
       }
     }));
-    await User.bulkWrite(operations);
-    res.json({ message: 'Staff Assignments Updated' });
+    
+    const result = await User.bulkWrite(operations);
+    console.log('Staff Upload Result:', result); // Check server logs
+    res.json({ message: 'Staff Assignments Updated', result });
   } catch (err) {
+    console.error('Staff Upload Error:', err);
     res.status(500).send('Server Error');
   }
 });
 
+// Upload Client Assignments
 router.post('/assign-client', auth, async (req, res) => {
   try {
     const users = req.body;
+    if (!Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ message: 'No user data provided' });
+    }
+
     const operations = users.map(u => ({
       updateOne: {
         filter: { sccId: u.sccId },
-        update: { $set: { name: u.name, pin: u.pin, role: 'client', mappedLocation: u.mappedLocation } },
+        update: { 
+          $set: { 
+            name: u.name, 
+            pin: u.pin, 
+            role: 'client', 
+            mappedLocation: u.mappedLocation,
+            isApproved: true // <--- CRITICAL
+          } 
+        },
         upsert: true
       }
     }));
-    await User.bulkWrite(operations);
-    res.json({ message: 'Client Assignments Updated' });
+    
+    const result = await User.bulkWrite(operations);
+    console.log('Client Upload Result:', result);
+    res.json({ message: 'Client Assignments Updated', result });
   } catch (err) {
+    console.error('Client Upload Error:', err);
     res.status(500).send('Server Error');
   }
 });
+
+// ... export
 
 module.exports = router;
