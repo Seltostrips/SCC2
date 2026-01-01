@@ -5,7 +5,7 @@ const ReferenceInventory = require('../models/ReferenceInventory');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. ROBUST LOOKUP (Unchanged)
+// 1. ROBUST LOOKUP
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
     const cleanSku = req.params.skuId.trim();
@@ -28,7 +28,7 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (UPDATED for Multi-Location)
+// 2. GET CLIENTS BY LOCATION (Fixed for Multi-Location Array)
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
@@ -36,25 +36,26 @@ router.get('/clients-by-location', auth, async (req, res) => {
 
     console.log(`Searching for clients mapped to: "${location}"`);
 
-    // Find clients where:
-    // 1. Their 'locations' array contains the search location
-    // 2. OR their 'mappedLocation' string matches (legacy support)
+    // Search logic:
+    // 1. Check if 'locations' array contains the exact string "Noida WH"
+    // 2. Check if legacy 'mappedLocation' string contains "Noida WH"
     const clients = await User.find({ 
         role: 'client', 
         $or: [
-            { locations: location }, // Exact match in array
-            { mappedLocation: { $regex: location, $options: 'i' } } // Fuzzy string match
+            { locations: location }, 
+            { mappedLocation: { $regex: location, $options: 'i' } }
         ]
     }).select('name company uniqueCode locations mappedLocation');
     
+    console.log(`Found ${clients.length} clients.`);
     res.json(clients);
   } catch (err) {
-    console.error(err);
+    console.error('Client Search Error:', err);
     res.status(500).send('Server Error');
   }
 });
 
-// 3. STAFF HISTORY (Unchanged)
+// 3. STAFF HISTORY
 router.get('/staff-history', auth, async (req, res) => {
   try {
     const entries = await Inventory.find({ staffId: req.user.id })
@@ -66,7 +67,7 @@ router.get('/staff-history', auth, async (req, res) => {
   }
 });
 
-// 4. CLIENT PENDING (Unchanged)
+// 4. CLIENT PENDING
 router.get('/pending', auth, async (req, res) => {
   try {
     const query = { status: 'pending-client' };
@@ -81,7 +82,7 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// 5. SUBMIT INVENTORY (Unchanged)
+// 5. SUBMIT INVENTORY
 router.post('/', auth, async (req, res) => {
   try {
     const { skuId, skuName, location, counts, odin, assignedClientId, notes } = req.body;
@@ -123,7 +124,7 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// 6. RESPOND (Unchanged)
+// 6. RESPOND
 router.post('/:id/respond', auth, async (req, res) => {
   try {
     const { action, comment } = req.body;
