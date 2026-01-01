@@ -7,19 +7,36 @@ export default function Login() {
   const [isAdmin, setIsAdmin] = useState(false);
   const router = useRouter();
 
-  const onSubmit = async (e) => {
+const onSubmit = async (e) => {
     e.preventDefault();
-    try {
-      const res = await axios.post('/api/auth/login', formData);
-      localStorage.setItem('token', res.data.token);
-      const user = res.data.user;
-      
-      localStorage.setItem('user', JSON.stringify(user));
+    
+    // Prepare payload based on login type
+    const payload = isAdmin 
+      ? { email: formData.email, password: formData.password }
+      : { sccId: formData.sccId, pin: formData.pin };
 
+    // Debug log to check what is being sent
+    console.log("Login Payload:", payload); 
+
+    if (!isAdmin && (!payload.sccId || !payload.pin)) {
+      alert("Please enter both SCC ID and PIN");
+      return;
+    }
+
+    try {
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/api/auth/login`, payload);
+      
+      // ... existing success logic ...
+      localStorage.setItem('token', res.data.token);
+      localStorage.setItem('user', JSON.stringify(res.data.user));
+      
+      const user = res.data.user;
       if (user.role === 'staff') router.push('/staff/select-location');
       else if (user.role === 'client') router.push('/client');
       else router.push('/admin');
+
     } catch (err) {
+      console.error(err);
       alert(err.response?.data?.message || 'Login failed');
     }
   };
@@ -55,3 +72,4 @@ export default function Login() {
     </div>
   );
 }
+
