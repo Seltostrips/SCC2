@@ -1,27 +1,63 @@
 const express = require('express');
 const router = express.Router();
 const Inventory = require('../models/Inventory');
-const ReferenceInventory = require('../models/ReferenceInventory'); // Restored
+const ReferenceInventory = require('../models/ReferenceInventory'); 
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
 // ==========================================
-// 1. LOOKUP & UTILITY ROUTES (Restored & New)
+// 1. LOOKUP & UTILITY ROUTES
 // ==========================================
 
-// [Restored] Lookup SKU (Old System)
+// [UPDATED] Lookup SKU (Deep Search: String, Number, & Fuzzy)
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
-    const skuId = req.params.skuId.trim();
-    console.log(`Lookup SKU: "${skuId}"`);
-
-    const item = await ReferenceInventory.findOne({ skuId: skuId });
+    const rawSku = req.params.skuId;
+    const cleanSku = rawSku.trim(); 
     
+    console.log(`[DEBUG] Lookup Request: "${cleanSku}"`);
+
+    // Strategy 1: Exact String Match (Standard)
+    let item = await ReferenceInventory.findOne({ skuId: cleanSku });
+    
+    // Strategy 2: Try as Number (Common issue with CSV imports)
+    if (!item && !isNaN(cleanSku)) {
+       console.log('[DEBUG] Exact match failed. Trying as Number...');
+       item = await ReferenceInventory.findOne({ skuId: Number(cleanSku) });
+    }
+
+    // Strategy 3: Case-Insensitive Regex (Fuzzy)
     if (!item) {
-      console.log('SKU Not Found in DB');
-      return res.status(404).json({ message: 'SKU not found' });
+       console.log('[DEBUG] Trying Fuzzy Regex...');
+       item = await ReferenceInventory.findOne({ 
+        skuId: { $regex: new RegExp(`^${cleanSku}$`, 'i') } 
+      });
+    }
+
+    // Strategy 4: Partial Match (Last Resort)
+    if (!item) {
+        console.log('[DEBUG] Trying Partial Match...');
+        item = await ReferenceInventory.findOne({
+            skuId: { $regex: cleanSku, $options: 'i' }
+        });
+    }
+
+    if (!item) {
+      console.log('❌ SKU Not Found in DB');
+      
+      // DEBUG: Print a sample of what IS in the DB to the console
+      // This will help you see if your data is "SKU: 123" or just "123"
+      const sample = await ReferenceInventory.findOne();
+      if (sample) {
+          console.log('--- DB SAMPLE ENTRY ---');
+          console.log(`Saved SKU: "${sample.skuId}" (Type: ${typeof sample.skuId})`);
+          console.log('-----------------------');
+      }
+
+      return res.status(404).json({ message: 'SKU not found in Reference Database (ODIN)' });
     }
     
+    console.log(`✅ Found SKU: ${item.skuId}`);
     res.json(item);
   } catch (err) {
     console.error('Lookup Error:', err);
@@ -29,7 +65,7 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// [Restored] Get Clients by Location (Old System)
+// [Restored] Get Clients by Location
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
@@ -41,7 +77,7 @@ router.get('/clients-by-location', auth, async (req, res) => {
   }
 });
 
-// [New] Get Unique Codes (Required for NEW Staff Dashboard)
+// [New] Get Unique Codes (Required for Staff Dashboard Dropdowns)
 router.get('/unique-codes', auth, async (req, res) => {
   try {
     const clients = await User.find({ role: 'client' }).select('company uniqueCode location');
@@ -53,7 +89,7 @@ router.get('/unique-codes', auth, async (req, res) => {
 });
 
 // ==========================================
-// 2. DASHBOARD DATA ROUTES (Client & Staff)
+// 2. DASHBOARD DATA ROUTES
 // ==========================================
 
 // [Updated] Get Pending Entries (For Client Dashboard)
@@ -64,14 +100,16 @@ router.get('/pending', auth, async (req, res) => {
     }
 
     const clientUser = await User.findById(req.user.id);
-    if (!clientUser || !clientUser.uniqueCode) {
-      return res.status(400).json({ message: 'Client profile incomplete (missing Unique Code)' });
-    }
+    // Support both old "location" and new "uniqueCode" logic
+    const uniqueCode = clientUser.uniqueCode || 'N/A';
 
-    // Find items matching this client's code that are pending
     const pendingItems = await Inventory.find({
       status: 'pending-client',
-      uniqueCode: clientUser.uniqueCode 
+      // Match by uniqueCode OR by explicit clientId assignment
+      $or: [
+          { uniqueCode: uniqueCode },
+          { clientId: clientUser._id }
+      ]
     })
     .populate('staffId', 'name')
     .sort({ 'timestamps.staffEntry': -1 });
@@ -83,7 +121,7 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// [New] Get Staff History (For Staff Dashboard - 3 Sections)
+// [New] Get Staff History (For Staff Dashboard 3 Sections)
 router.get('/staff-history', auth, async (req, res) => {
   try {
     if (req.user.role !== 'staff') {
@@ -101,38 +139,26 @@ router.get('/staff-history', auth, async (req, res) => {
 });
 
 // ==========================================
-// 3. SUBMISSION ROUTES (Hybrid Logic)
+// 3. SUBMISSION ROUTES
 // ==========================================
 
 router.post('/', auth, async (req, res) => {
   try {
-    // --- SCENARIO A: NEW SYSTEM (Bin ID / Book Qty) ---
-    // This handles data coming from your current Staff Dashboard
+    // --- SCENARIO A: NEW SYSTEM (Bin ID) ---
     if (req.body.binId) {
-        const { 
-          binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode 
-        } = req.body;
-
-        console.log(`Submitting (Bin System): Bin ${binId} for Client ${uniqueCode}`);
-
+        const { binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode } = req.body;
+        
+        console.log(`Submitting (Bin): ${binId}`);
         const discrepancy = Math.abs(bookQuantity - actualQuantity);
-
+        
         let status = 'auto-approved';
         if (discrepancy > 0) status = 'pending-client';
 
-        // Link Client ID if possible
         const clientUser = await User.findOne({ uniqueCode });
 
         const newEntry = new Inventory({
-          binId,
-          bookQuantity,
-          actualQuantity,
-          notes,
-          location,
-          uniqueCode,
-          pincode,
-          discrepancy,
-          status,
+          binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode,
+          discrepancy, status,
           staffId: req.user.id,
           clientId: clientUser ? clientUser._id : undefined,
           timestamps: { staffEntry: new Date() }
@@ -143,15 +169,13 @@ router.post('/', auth, async (req, res) => {
     } 
     
     // --- SCENARIO B: OLD SYSTEM (SKU / ODIN) ---
-    // This handles data if you have an older page sending "skuId" and "counts"
+    // This is what your Staff Dashboard is currently using
     else if (req.body.skuId) {
-        const { 
-          skuId, skuName, location, counts, odin, assignedClientId 
-        } = req.body;
+        const { skuId, skuName, location, counts, odin, assignedClientId } = req.body;
 
-        console.log('Submitting (SKU System):', skuId, location);
+        console.log(`Submitting (SKU): ${skuId}`);
 
-        // Old Audit Logic
+        // Logic: Compare Identified vs Max Quantity
         let auditResult = 'Match';
         if (counts.totalIdentified > odin.maxQuantity) auditResult = 'Excess';
         else if (counts.totalIdentified < odin.minQuantity) auditResult = 'Shortfall';
@@ -160,24 +184,22 @@ router.post('/', auth, async (req, res) => {
         if (auditResult !== 'Match') status = 'pending-client';
 
         const newEntry = new Inventory({
-          skuId,
-          skuName,
-          location,
-          counts,
-          odin,
-          auditResult, // Note: Your schema might need to support this field if you use it
-          status,
+          skuId, skuName, location, counts, odin, auditResult, status,
           staffId: req.user.id,
-          assignedClientId: (status === 'pending-client') ? assignedClientId : undefined
+          // If assignedClientId is sent, use it. Otherwise undefined.
+          clientId: assignedClientId || undefined,
+          // IMPORTANT: Save uniqueCode if available, or "LEGACY" if not, to prevent crashes
+          uniqueCode: req.body.uniqueCode || 'LEGACY', 
+          pincode: req.body.pincode || '000000',
+          timestamps: { staffEntry: new Date() }
         });
 
         await newEntry.save();
         return res.json(newEntry);
     }
     
-    // Invalid Request
     else {
-        return res.status(400).json({ message: 'Invalid submission data. Missing binId or skuId.' });
+        return res.status(400).json({ message: 'Invalid submission data.' });
     }
 
   } catch (err) {
@@ -197,8 +219,13 @@ router.post('/:id/respond', auth, async (req, res) => {
 
     // Verify ownership
     const clientUser = await User.findById(req.user.id);
-    if (entry.uniqueCode !== clientUser.uniqueCode) {
-        return res.status(403).json({ message: 'Not authorized for this entry' });
+    
+    // Robust Ownership Check: Unique Code OR Client ID Match
+    const isOwner = (entry.uniqueCode && entry.uniqueCode === clientUser.uniqueCode) || 
+                    (entry.clientId && entry.clientId.toString() === req.user.id);
+
+    if (!isOwner) {
+         return res.status(403).json({ message: 'Not authorized' });
     }
 
     if (action === 'approved') entry.status = 'client-approved';
