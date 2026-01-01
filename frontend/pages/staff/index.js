@@ -3,29 +3,23 @@ import axios from 'axios';
 import withAuth from '../../components/withAuth';
 
 function StaffDashboard({ user }) {
-  // --- STATE ---
-  // 1. Search & Lookup State
+  // --- STATE 1: SKU SEARCH & FORM ---
   const [skuSearch, setSkuSearch] = useState('');
   const [lookupResult, setLookupResult] = useState(null);
-  const [loadingLookup, setLoadingLookup] = useState(false);
-
-  // 2. Submission Form State
   const [countInput, setCountInput] = useState('');
   const [location, setLocation] = useState('');
   const [notes, setNotes] = useState('');
+  const [loadingLookup, setLoadingLookup] = useState(false);
 
-  // 3. UI/History State
+  // --- STATE 2: HISTORY & UI ---
+  const [history, setHistory] = useState([]);
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [history, setHistory] = useState([]);
-  const [uniqueCodes, setUniqueCodes] = useState([]); // For Client selection if needed
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchHistory();
-    fetchUniqueCodes();
   }, []);
-
-  // --- API CALLS ---
 
   const fetchHistory = async () => {
     try {
@@ -34,24 +28,14 @@ function StaffDashboard({ user }) {
         headers: { Authorization: `Bearer ${token}` }
       });
       setHistory(res.data);
+      setLoading(false);
     } catch (err) {
       console.error('Error fetching history:', err);
+      setLoading(false);
     }
   };
 
-  const fetchUniqueCodes = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get('/api/inventory/unique-codes', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setUniqueCodes(res.data);
-    } catch (err) {
-      console.error('Error fetching codes:', err);
-    }
-  };
-
-  // 1. LOOKUP SKU
+  // --- HANDLER 1: LOOKUP SKU ---
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!skuSearch.trim()) return;
@@ -59,10 +43,10 @@ function StaffDashboard({ user }) {
     setLoadingLookup(true);
     setLookupResult(null);
     setMessage('');
+    setCountInput(''); // Reset count on new search
 
     try {
       const token = localStorage.getItem('token');
-      // Call the "Old" Lookup Route
       const res = await axios.get(`/api/inventory/lookup/${skuSearch}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -75,7 +59,7 @@ function StaffDashboard({ user }) {
     }
   };
 
-  // 2. SUBMIT INVENTORY (Old Format Payload)
+  // --- HANDLER 2: SUBMIT INVENTORY ---
   const handleSubmit = async () => {
     if (!countInput || !lookupResult) {
       alert('Please enter a count and ensure SKU is looked up.');
@@ -87,21 +71,20 @@ function StaffDashboard({ user }) {
     try {
       const token = localStorage.getItem('token');
       
-      // Construct the "Old" Payload Structure
+      // Construct the "Old" Payload Structure (SKU + Counts + ODIN)
       const payload = {
         skuId: lookupResult.skuId,
-        skuName: lookupResult.skuName, // Assuming ref DB has this
+        skuName: lookupResult.name || lookupResult.skuName, 
         location: location,
         counts: {
           totalIdentified: parseInt(countInput, 10)
         },
         odin: {
-          minQuantity: lookupResult.minQuantity || 0,
-          maxQuantity: lookupResult.maxQuantity || 0,
-          // Pass other ref details if needed for backend validation
+          minQuantity: 0, // Default or derived if you have logic
+          maxQuantity: lookupResult.systemQuantity || 0
         },
-        // We can attach the currently selected client code if your logic requires it,
-        // or let the backend handle it based on the "ODIN" match.
+        // Optional: Pass uniqueCode/pincode if your logic requires it or leave for backend defaults
+        notes: notes
       };
 
       const res = await axios.post('/api/inventory', payload, {
@@ -114,12 +97,12 @@ function StaffDashboard({ user }) {
         setMessage('Warning: Mismatch. Sent for Client Review.');
       }
 
-      // Reset Form
+      // Reset Form & Refresh History
       setSkuSearch('');
       setLookupResult(null);
       setCountInput('');
       setNotes('');
-      fetchHistory(); // Refresh the bottom sections
+      fetchHistory(); // <--- Refresh the 3 sections immediately
 
     } catch (err) {
       console.error('Submit error:', err);
@@ -129,18 +112,21 @@ function StaffDashboard({ user }) {
     }
   };
 
-  // --- SECTIONS FILTERING ---
+  // Filter sections
   const pendingSection = history.filter(item => item.status === 'pending-client');
   const rejectedSection = history.filter(item => item.status === 'client-rejected');
   const matchedSection = history.filter(item => item.status === 'auto-approved' || item.status === 'client-approved');
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto space-y-8">
         
-        {/* --- PART 1: SKU LOOKUP FORM (The "Old" Format) --- */}
+        {/* --- PART 1: SKU LOOKUP FORM (The Old Workflow) --- */}
         <div className="bg-white p-8 rounded-lg shadow">
           <h2 className="text-2xl font-bold mb-6 text-center">Staff Inventory Entry</h2>
+          <p className="text-center mb-6 text-gray-500">Welcome, {user.name}</p>
           
           {message && (
             <div className={`mb-4 p-3 rounded text-center ${message.includes('Success') ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
@@ -166,31 +152,34 @@ function StaffDashboard({ user }) {
             </button>
           </form>
 
-          {/* B. LOOKUP RESULT & ENTRY */}
+          {/* B. LOOKUP RESULT & ENTRY FORM */}
           {lookupResult && (
             <div className="border-t pt-6 animate-fade-in">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                <div className="bg-gray-50 p-4 rounded">
-                  <h3 className="font-bold text-gray-700 mb-2">Reference Data (ODIN)</h3>
+                
+                {/* Left: Reference Data */}
+                <div className="bg-blue-50 p-4 rounded border border-blue-100">
+                  <h3 className="font-bold text-blue-800 mb-2">ODIN Reference Data</h3>
                   <p><span className="font-semibold">SKU:</span> {lookupResult.skuId}</p>
-                  <p><span className="font-semibold">Name:</span> {lookupResult.skuName || 'N/A'}</p>
-                  <p><span className="font-semibold">Expected Range:</span> {lookupResult.minQuantity} - {lookupResult.maxQuantity}</p>
-                  <p><span className="font-semibold">Color/Size:</span> {lookupResult.color || '-'} / {lookupResult.size || '-'}</p>
+                  <p><span className="font-semibold">Name:</span> {lookupResult.name}</p>
+                  <p><span className="font-semibold">System Qty:</span> {lookupResult.systemQuantity}</p>
+                  <p><span className="font-semibold">Location:</span> {lookupResult.pickingLocation || 'N/A'}</p>
                 </div>
 
+                {/* Right: Input Form */}
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-gray-700 font-medium mb-1">Your Count</label>
+                    <label className="block text-gray-700 font-medium mb-1">Actual Count</label>
                     <input 
                       type="number" 
                       className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500"
                       value={countInput}
                       onChange={(e) => setCountInput(e.target.value)}
-                      placeholder="Enter actual quantity"
+                      placeholder="Enter quantity found"
                     />
                   </div>
                   <div>
-                    <label className="block text-gray-700 font-medium mb-1">Location</label>
+                    <label className="block text-gray-700 font-medium mb-1">Your Location (Optional)</label>
                     <input 
                       type="text" 
                       className="w-full p-2 border rounded"
@@ -202,10 +191,20 @@ function StaffDashboard({ user }) {
                 </div>
               </div>
 
+              <div className="mb-4">
+                 <label className="block text-gray-700 font-medium mb-1">Notes</label>
+                 <textarea 
+                    className="w-full p-2 border rounded" 
+                    rows="2"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                 ></textarea>
+              </div>
+
               <button
                 onClick={handleSubmit}
                 disabled={isSubmitting}
-                className="w-full bg-green-600 text-white py-3 rounded font-bold hover:bg-green-700 disabled:opacity-50"
+                className="w-full bg-green-600 text-white py-3 rounded font-bold hover:bg-green-700 disabled:opacity-50 shadow-sm"
               >
                 {isSubmitting ? 'Submitting...' : 'Submit Inventory Count'}
               </button>
@@ -213,7 +212,7 @@ function StaffDashboard({ user }) {
           )}
         </div>
 
-        {/* --- PART 2: HISTORY SECTIONS (The "New" Requirement) --- */}
+        {/* --- PART 2: HISTORY SECTIONS (The New Requirement) --- */}
         
         {/* SECTION 1: Pending Client Approval */}
         <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-400">
