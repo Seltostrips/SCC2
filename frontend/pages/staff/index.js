@@ -17,6 +17,15 @@ function StaffDashboard({ user }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Helper to get Base URL (Handles trailing slash issues)
+  const getApiUrl = (endpoint) => {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
+    // Remove trailing slash from base if it exists, and leading slash from endpoint
+    const cleanBase = baseUrl.replace(/\/$/, '');
+    const cleanEndpoint = endpoint.replace(/^\//, '');
+    return `${cleanBase}/${cleanEndpoint}`;
+  };
+
   useEffect(() => {
     fetchHistory();
   }, []);
@@ -24,7 +33,8 @@ function StaffDashboard({ user }) {
   const fetchHistory = async () => {
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/inventory/staff-history', {
+      // FIXED: Use full URL to hit Backend
+      const res = await axios.get(getApiUrl('/api/inventory/staff-history'), {
         headers: { Authorization: `Bearer ${token}` }
       });
       setHistory(res.data);
@@ -43,11 +53,12 @@ function StaffDashboard({ user }) {
     setLoadingLookup(true);
     setLookupResult(null);
     setMessage('');
-    setCountInput(''); // Reset count on new search
+    setCountInput('');
 
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get(`/api/inventory/lookup/${skuSearch}`, {
+      // FIXED: Use full URL
+      const res = await axios.get(getApiUrl(`/api/inventory/lookup/${skuSearch}`), {
         headers: { Authorization: `Bearer ${token}` }
       });
       setLookupResult(res.data);
@@ -71,7 +82,6 @@ function StaffDashboard({ user }) {
     try {
       const token = localStorage.getItem('token');
       
-      // Construct the "Old" Payload Structure (SKU + Counts + ODIN)
       const payload = {
         skuId: lookupResult.skuId,
         skuName: lookupResult.name || lookupResult.skuName, 
@@ -80,14 +90,14 @@ function StaffDashboard({ user }) {
           totalIdentified: parseInt(countInput, 10)
         },
         odin: {
-          minQuantity: 0, // Default or derived if you have logic
+          minQuantity: 0,
           maxQuantity: lookupResult.systemQuantity || 0
         },
-        // Optional: Pass uniqueCode/pincode if your logic requires it or leave for backend defaults
         notes: notes
       };
 
-      const res = await axios.post('/api/inventory', payload, {
+      // FIXED: Use full URL
+      const res = await axios.post(getApiUrl('/api/inventory'), payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -102,7 +112,7 @@ function StaffDashboard({ user }) {
       setLookupResult(null);
       setCountInput('');
       setNotes('');
-      fetchHistory(); // <--- Refresh the 3 sections immediately
+      fetchHistory(); 
 
     } catch (err) {
       console.error('Submit error:', err);
@@ -123,7 +133,7 @@ function StaffDashboard({ user }) {
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto space-y-8">
         
-        {/* --- PART 1: SKU LOOKUP FORM (The Old Workflow) --- */}
+        {/* --- PART 1: SKU LOOKUP FORM --- */}
         <div className="bg-white p-8 rounded-lg shadow">
           <h2 className="text-2xl font-bold mb-6 text-center">Staff Inventory Entry</h2>
           <p className="text-center mb-6 text-gray-500">Welcome, {user.name}</p>
@@ -134,7 +144,7 @@ function StaffDashboard({ user }) {
             </div>
           )}
 
-          {/* A. SEARCH BAR */}
+          {/* SEARCH BAR */}
           <form onSubmit={handleSearch} className="flex gap-4 mb-6">
             <input
               type="text"
@@ -152,12 +162,11 @@ function StaffDashboard({ user }) {
             </button>
           </form>
 
-          {/* B. LOOKUP RESULT & ENTRY FORM */}
+          {/* LOOKUP RESULT */}
           {lookupResult && (
             <div className="border-t pt-6 animate-fade-in">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 
-                {/* Left: Reference Data */}
                 <div className="bg-blue-50 p-4 rounded border border-blue-100">
                   <h3 className="font-bold text-blue-800 mb-2">ODIN Reference Data</h3>
                   <p><span className="font-semibold">SKU:</span> {lookupResult.skuId}</p>
@@ -166,7 +175,6 @@ function StaffDashboard({ user }) {
                   <p><span className="font-semibold">Location:</span> {lookupResult.pickingLocation || 'N/A'}</p>
                 </div>
 
-                {/* Right: Input Form */}
                 <div className="space-y-4">
                   <div>
                     <label className="block text-gray-700 font-medium mb-1">Actual Count</label>
@@ -212,20 +220,20 @@ function StaffDashboard({ user }) {
           )}
         </div>
 
-        {/* --- PART 2: HISTORY SECTIONS (The New Requirement) --- */}
+        {/* --- PART 2: HISTORY SECTIONS --- */}
         
-        {/* SECTION 1: Pending Client Approval */}
+        {/* Pending Client Approval */}
         <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-400">
           <h3 className="text-xl font-bold mb-4 text-yellow-700">Pending Client Approval</h3>
           {pendingSection.length === 0 ? <p className="text-gray-500">No pending items.</p> : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU/Bin</th><th className="p-2 text-left">Result</th><th className="p-2 text-left">Date</th></tr></thead>
+                <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU</th><th className="p-2 text-left">Result</th><th className="p-2 text-left">Date</th></tr></thead>
                 <tbody>
                   {pendingSection.map(item => (
                     <tr key={item._id} className="border-b">
-                      <td className="p-2">{item.skuId || item.binId}</td>
-                      <td className="p-2 text-yellow-600 font-medium">{item.auditResult || 'Mismatch'}</td>
+                      <td className="p-2">{item.skuId}</td>
+                      <td className="p-2 text-yellow-600 font-medium">{item.auditResult}</td>
                       <td className="p-2">{new Date(item.timestamps.staffEntry).toLocaleDateString()}</td>
                     </tr>
                   ))}
@@ -235,17 +243,17 @@ function StaffDashboard({ user }) {
           )}
         </div>
 
-        {/* SECTION 2: Rejected by Client */}
+        {/* Rejected by Client */}
         <div className="bg-white p-6 rounded-lg shadow border-l-4 border-red-500">
           <h3 className="text-xl font-bold mb-4 text-red-700">Rejected by Client</h3>
           {rejectedSection.length === 0 ? <p className="text-gray-500">No rejected items.</p> : (
              <div className="overflow-x-auto">
              <table className="min-w-full text-sm">
-               <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU/Bin</th><th className="p-2 text-left">Reason</th></tr></thead>
+               <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU</th><th className="p-2 text-left">Reason</th></tr></thead>
                <tbody>
                  {rejectedSection.map(item => (
                    <tr key={item._id} className="border-b bg-red-50">
-                     <td className="p-2">{item.skuId || item.binId}</td>
+                     <td className="p-2">{item.skuId}</td>
                      <td className="p-2 italic">"{item.clientResponse?.comment || 'No comment'}"</td>
                    </tr>
                  ))}
@@ -255,17 +263,17 @@ function StaffDashboard({ user }) {
           )}
         </div>
 
-        {/* SECTION 3: Matched & Submitted */}
+        {/* Matched & Submitted */}
         <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
           <h3 className="text-xl font-bold mb-4 text-green-700">Matched and Submitted</h3>
           {matchedSection.length === 0 ? <p className="text-gray-500">No matched items.</p> : (
             <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU/Bin</th><th className="p-2 text-left">Status</th></tr></thead>
+              <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU</th><th className="p-2 text-left">Status</th></tr></thead>
               <tbody>
                 {matchedSection.map(item => (
                   <tr key={item._id} className="border-b">
-                    <td className="p-2">{item.skuId || item.binId}</td>
+                    <td className="p-2">{item.skuId}</td>
                     <td className="p-2 text-green-600 font-medium">
                       {item.status === 'auto-approved' ? 'Auto Match' : 'Client Approved'}
                     </td>
