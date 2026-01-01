@@ -9,31 +9,39 @@ function ClientDashboard({ user }) {
   const [loading, setLoading] = useState(true);
   const [socket, setSocket] = useState(null);
 
+  // Safely access user properties to prevent crashes
+  const userName = user?.name || user?.company || 'Client';
+  const userCode = user?.sccId || user?.uniqueCode || 'N/A';
+  // Check for the new 'mappedLocation' field first, then fall back safely to old location object
+  const userLocation = user?.mappedLocation || user?.location?.city || 'Unknown Location';
+
   useEffect(() => {
-    fetchPendingEntries();
-    
-    // Initialize socket connection
-    if (typeof window !== 'undefined') {
-      import('socket.io-client').then((ioModule) => {
-        const newSocket = ioModule.default(process.env.NEXT_PUBLIC_API_URL);
-        setSocket(newSocket);
-        
-        // Join client room
-        newSocket.emit('join-room', 'client');
-        
-        // Listen for new pending entries for this specific client
-        newSocket.on(`new-pending-entry-${user._id}`, (entry) => {
-          console.log('New pending entry received:', entry);
-          setPendingEntries(prev => [entry, ...prev]);
-          alert('New inventory entry requires your review!');
+    if (user?._id) {
+      fetchPendingEntries();
+      
+      // Initialize socket connection
+      if (typeof window !== 'undefined') {
+        import('socket.io-client').then((ioModule) => {
+          const newSocket = ioModule.default(process.env.NEXT_PUBLIC_API_URL);
+          setSocket(newSocket);
+          
+          // Join client room
+          newSocket.emit('join-room', 'client');
+          
+          // Listen for new pending entries for this specific client
+          newSocket.on(`new-pending-entry-${user._id}`, (entry) => {
+            console.log('New pending entry received:', entry);
+            setPendingEntries(prev => [entry, ...prev]);
+            alert('New inventory entry requires your review!');
+          });
+          
+          return () => {
+            newSocket.disconnect();
+          };
         });
-        
-        return () => {
-          newSocket.disconnect();
-        };
-      });
+      }
     }
-  }, [user._id]);
+  }, [user?._id]);
 
   const fetchPendingEntries = async () => {
     try {
@@ -44,11 +52,13 @@ function ClientDashboard({ user }) {
         }
       });
       console.log('Pending entries:', res.data);
-      setPendingEntries(res.data);
+      // Ensure we always set an array, even if API returns something else
+      setPendingEntries(Array.isArray(res.data) ? res.data : []);
       setLoading(false);
     } catch (err) {
       console.error('Error fetching pending entries:', err);
-      setLoading(false);
+      // Do not crash the UI on API error
+      setLoading(false); 
     }
   };
 
@@ -67,6 +77,7 @@ function ClientDashboard({ user }) {
       setSelectedEntry(null);
     } catch (err) {
       console.error('Error accepting entry:', err);
+      alert('Failed to accept entry. Please try again.');
     }
   };
 
@@ -92,6 +103,7 @@ function ClientDashboard({ user }) {
       setRejectionComment('');
     } catch (err) {
       console.error('Error rejecting entry:', err);
+      alert('Failed to reject entry. Please try again.');
     }
   };
 
@@ -103,10 +115,12 @@ function ClientDashboard({ user }) {
     <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-2xl font-bold mb-6">Client Dashboard</h1>
+        
+        {/* User Info Card - Fixed to prevent crashes */}
         <div className="mb-4 p-4 bg-blue-50 rounded-lg">
-          <p className="font-medium">Company: {user.company}</p>
-          <p className="font-medium">Unique Code: {user.uniqueCode}</p>
-          <p className="font-medium">Location: {user.location.city}, {user.location.pincode}</p>
+          <p className="font-medium">Company/Name: {userName}</p>
+          <p className="font-medium">Unique Code: {userCode}</p>
+          <p className="font-medium">Location: {userLocation}</p>
         </div>
         
         {selectedEntry ? (
@@ -132,7 +146,7 @@ function ClientDashboard({ user }) {
               </div>
               <div>
                 <p className="text-sm text-gray-500">Staff</p>
-                <p className="font-medium">{selectedEntry.staffId?.name || 'N/A'}</p>
+                <p className="font-medium">{selectedEntry?.staffId?.name || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Location</p>
@@ -205,7 +219,7 @@ function ClientDashboard({ user }) {
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{entry.binId}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry.bookQuantity}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry.actualQuantity}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry.staffId?.name || 'N/A'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry?.staffId?.name || 'N/A'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry.status}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <button
