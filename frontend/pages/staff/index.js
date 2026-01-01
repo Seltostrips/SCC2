@@ -16,11 +16,11 @@ function StaffDashboard({ user }) {
   
   // ODIN Inputs
   const [odinInputs, setOdinInputs] = useState({
-    minQuantity: 0, // "Enter Quantity as per ODIN"
-    blocked: 0      // "Enter Blocked Quantity"
+    minQuantity: 0, 
+    blocked: 0      
   });
 
-  // Client Selection (For Discrepancies)
+  // Client Selection
   const [availableClients, setAvailableClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState('');
   
@@ -30,7 +30,6 @@ function StaffDashboard({ user }) {
   const [message, setMessage] = useState('');
   const [history, setHistory] = useState([]);
 
-  // URL Helper
   const getApiUrl = (endpoint) => {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
     return `${baseUrl.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
@@ -40,10 +39,16 @@ function StaffDashboard({ user }) {
     fetchHistory();
   }, []);
 
-  // Fetch clients whenever Location changes
+  // AUTO-FETCH CLIENTS when "Location" field changes
   useEffect(() => {
-    if (location && location.length > 2) {
-      fetchClientsByLocation(location);
+    if (location && location.trim().length > 1) {
+      // Use a debounce or just simple check to avoid too many calls
+      const timer = setTimeout(() => {
+         fetchClientsByLocation(location);
+      }, 500);
+      return () => clearTimeout(timer);
+    } else {
+      setAvailableClients([]);
     }
   }, [location]);
 
@@ -60,7 +65,8 @@ function StaffDashboard({ user }) {
   const fetchClientsByLocation = async (loc) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get(getApiUrl(`/api/inventory/clients-by-location?location=${loc}`), {
+      // Encode URI component to handle spaces (e.g., "Noida WH") correctly
+      const res = await axios.get(getApiUrl(`/api/inventory/clients-by-location?location=${encodeURIComponent(loc)}`), {
         headers: { Authorization: `Bearer ${token}` }
       });
       setAvailableClients(res.data);
@@ -96,6 +102,7 @@ function StaffDashboard({ user }) {
     setCounts({ picking: 0, bulk: 0, nearExpiry: 0, jit: 0, damaged: 0 });
     setOdinInputs({ minQuantity: 0, blocked: 0 });
     setSelectedClientId('');
+    // Note: We do NOT reset location here if you want it to persist between scans
 
     try {
       const token = localStorage.getItem('token');
@@ -103,7 +110,7 @@ function StaffDashboard({ user }) {
         headers: { Authorization: `Bearer ${token}` }
       });
       setLookupResult(res.data);
-      // Auto-populate location if available in ODIN
+      // If ODIN has a pickingLocation, auto-fill it (which triggers client fetch)
       if (res.data.pickingLocation) setLocation(res.data.pickingLocation);
     } catch (err) {
       setMessage('SKU not found in Reference Database.');
@@ -137,9 +144,10 @@ function StaffDashboard({ user }) {
 
       setMessage(isObjection ? 'Objection Raised! Sent to Client.' : 'Success! Entry Auto-Approved.');
       
-      // Clear form
+      // Clear specific fields
       setSkuSearch('');
       setLookupResult(null);
+      // Keep location for next item (common workflow)
       fetchHistory();
     } catch (err) {
       console.error(err);
@@ -200,7 +208,7 @@ function StaffDashboard({ user }) {
                     type="text" 
                     value={location} 
                     onChange={e => setLocation(e.target.value)}
-                    className="ml-2 p-1 border rounded w-32"
+                    className="ml-2 p-1 border rounded w-32 font-semibold"
                     placeholder="Enter Loc"
                   />
                 </div>
@@ -284,19 +292,22 @@ function StaffDashboard({ user }) {
                 ) : (
                   <div className="space-y-3">
                      <div>
-                        <label className="block text-sm font-bold text-red-700 mb-1">Select Client Staff to Raise Objection:</label>
+                        <label className="block text-sm font-bold text-red-700 mb-1">Raise Objection To:</label>
                         <select 
                           className="w-full p-2 border border-red-300 rounded"
                           value={selectedClientId}
                           onChange={e => setSelectedClientId(e.target.value)}
                         >
-                          <option value="">-- Select Client Mapped to "{location}" --</option>
+                          {/* UPDATED: Dynamic Options based on "availableClients" */}
+                          <option value="">-- Select Client Staff at "{location}" --</option>
                           {availableClients.map(c => (
-                            <option key={c._id} value={c._id}>{c.name} ({c.company})</option>
+                            <option key={c._id} value={c._id}>
+                              {c.name} ({c.uniqueCode || 'No Code'}) - {c.company}
+                            </option>
                           ))}
                         </select>
-                        {availableClients.length === 0 && (
-                          <p className="text-xs text-red-500 mt-1">* No clients found for location "{location}". Check spelling or backend mapping.</p>
+                        {availableClients.length === 0 && location.length > 2 && (
+                          <p className="text-xs text-red-500 mt-1">* No client staff found for "{location}". Ensure correct location spelling.</p>
                         )}
                      </div>
                      <button
