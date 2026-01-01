@@ -24,13 +24,12 @@ function AdminDashboard() {
     
     try {
       if (activeTab === 'monitor') {
-        // Fetch All Inventory Submissions
         const res = await axios.get(`${baseUrl}/api/admin/inventory-all`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         setInventory(res.data);
       } else if (activeTab === 'users') {
-        // Fetch All Users
+        // We use the auth route to fetch users
         const res = await axios.get(`${baseUrl}/api/auth/users`, {
           headers: { Authorization: `Bearer ${token}` }
         });
@@ -41,7 +40,7 @@ function AdminDashboard() {
     }
   };
 
-  // -- TEMPLATE DOWNLOAD LOGIC --
+  // -- TEMPLATE DOWNLOAD LOGIC (Legacy Headers Preserved) --
   const handleDownloadTemplate = () => {
     let headers = [];
     let filename = '';
@@ -53,7 +52,6 @@ function AdminDashboard() {
       headers = ['Staff ID', 'Login PIN', 'Name', 'Location1', 'Location2', 'Location3', 'Location4', 'Location5', 'Location6'];
       filename = 'staff_template.csv';
     } else if (uploadType === 'client') {
-      // Client CSV structure usually matches Staff but role differs
       headers = ['Staff ID', 'Login PIN', 'Name', 'Location1', 'Location2', 'Location3', 'Location4', 'Location5', 'Location6'];
       filename = 'client_template.csv';
     }
@@ -92,17 +90,14 @@ function AdminDashboard() {
 
         // --- SCENARIO A: REFERENCE INVENTORY UPLOAD ---
         if (uploadType === 'inventory') {
-          // Validate Headers
           const firstRow = results.data[0];
           if (!firstRow['SKU ID']) {
              setLoading(false);
              return alert('Error: CSV must have "SKU ID" column.');
           }
 
-          // Process in Batches or One-by-One
           for (const row of results.data) {
              try {
-                // Map CSV headers to Mongoose Schema
                 const payload = {
                    skuId: row['SKU ID'],
                    name: row['Name of the SKU ID'],
@@ -122,18 +117,17 @@ function AdminDashboard() {
           }
         } 
         
-        // --- SCENARIO B: STAFF / CLIENT UPLOAD ---
+        // --- SCENARIO B: STAFF / CLIENT UPLOAD (Multi-Location Logic) ---
         else {
-           // Validate Headers
            const firstRow = results.data[0];
            if (!firstRow['Staff ID'] && !firstRow['Client ID']) {
               setLoading(false);
-              return alert('Error: CSV must have "Staff ID" (or Client ID) column.');
+              return alert('Error: CSV must have "Staff ID" column.');
            }
 
            for (const row of results.data) {
              try {
-               // Extract Locations from Location1...Location6
+               // Logic to consolidate Location1...Location6 into an array
                const locArray = [];
                for (let i = 1; i <= 6; i++) {
                  if (row[`Location${i}`] && row[`Location${i}`].trim()) {
@@ -141,14 +135,13 @@ function AdminDashboard() {
                  }
                }
 
-               // Map CSV to User Schema
                const payload = {
                  name: row['Name'],
                  uniqueCode: row['Staff ID'] || row['Client ID'],
                  loginPin: row['Login PIN'],
                  role: uploadType, // 'staff' or 'client'
-                 locations: locArray,
-                 mappedLocation: locArray.join(', ') // Legacy support
+                 locations: locArray, // <-- ARRAY SAVED HERE
+                 mappedLocation: locArray.join(', ') // Legacy string support
                };
 
                await axios.post(`${baseUrl}/api/auth/register`, payload, {
@@ -164,8 +157,6 @@ function AdminDashboard() {
 
         setLoading(false);
         setUploadStatus(`Upload Complete. Success: ${successCount}, Failed: ${failCount}`);
-        
-        // Clear file input
         e.target.value = null;
       }
     });
@@ -173,7 +164,7 @@ function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      {/* --- TOP NAVIGATION --- */}
+      {/* NAVIGATION */}
       <nav className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
@@ -202,9 +193,6 @@ function AdminDashboard() {
                 </button>
               </div>
             </div>
-            <div className="flex items-center">
-              <span className="text-gray-500 text-sm">Welcome, Admin</span>
-            </div>
           </div>
         </div>
       </nav>
@@ -212,7 +200,7 @@ function AdminDashboard() {
       <div className="py-10">
         <main className="max-w-7xl mx-auto sm:px-6 lg:px-8">
           
-          {/* --- TAB 1: MONITOR INVENTORY --- */}
+          {/* TAB 1: MONITOR */}
           {activeTab === 'monitor' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
               <div className="px-4 py-5 sm:px-6 flex justify-between items-center">
@@ -227,7 +215,6 @@ function AdminDashboard() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Staff</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Audit</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Discrepancy</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
@@ -244,9 +231,6 @@ function AdminDashboard() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.staffId?.name || 'Unknown'}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.auditResult}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {Math.abs(item.counts?.totalIdentified - item.odin?.maxQuantity) || 0}
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -255,7 +239,7 @@ function AdminDashboard() {
             </div>
           )}
 
-          {/* --- TAB 2: USERS --- */}
+          {/* TAB 2: USERS */}
           {activeTab === 'users' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
               <div className="px-4 py-5 sm:px-6">
@@ -290,23 +274,18 @@ function AdminDashboard() {
             </div>
           )}
 
-          {/* --- TAB 3: UPLOAD --- */}
+          {/* TAB 3: UPLOAD */}
           {activeTab === 'upload' && (
             <div className="bg-white shadow sm:rounded-lg">
               <div className="px-4 py-5 sm:p-6">
                 <h3 className="text-lg leading-6 font-medium text-gray-900">Bulk Data Upload</h3>
-                <div className="mt-2 max-w-xl text-sm text-gray-500">
-                  <p>Select the type of data you wish to upload. Ensure your CSV matches the template exactly.</p>
-                </div>
-                
                 <div className="mt-5 space-y-4">
-                  {/* Type Selection */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Data Type</label>
                     <select
                       value={uploadType}
                       onChange={(e) => setUploadType(e.target.value)}
-                      className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border"
+                      className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 sm:text-sm rounded-md border"
                     >
                       <option value="inventory">Reference Inventory (ODIN)</option>
                       <option value="staff">Staff Accounts</option>
@@ -314,43 +293,26 @@ function AdminDashboard() {
                     </select>
                   </div>
 
-                  {/* Template Download */}
                   <div>
                     <button
                       onClick={handleDownloadTemplate}
-                      className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
+                      className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                     >
-                      Download {uploadType.charAt(0).toUpperCase() + uploadType.slice(1)} CSV Template
+                      Download CSV Template
                     </button>
                   </div>
 
-                  {/* File Input */}
                   <div className="mt-4">
                     <label className="block text-sm font-medium text-gray-700">Upload CSV File</label>
-                    <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
-                      <div className="space-y-1 text-center">
-                        <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
-                          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <div className="flex text-sm text-gray-600">
-                          <label className="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
-                            <span>Upload a file</span>
-                            <input 
-                              type="file" 
-                              className="sr-only" 
-                              accept=".csv" 
-                              onChange={handleFileUpload}
-                              disabled={loading}
-                            />
-                          </label>
-                          <p className="pl-1">or drag and drop</p>
-                        </div>
-                        <p className="text-xs text-gray-500">CSV up to 10MB</p>
-                      </div>
-                    </div>
+                    <input 
+                      type="file" 
+                      accept=".csv"
+                      onChange={handleFileUpload}
+                      disabled={loading}
+                      className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                    />
                   </div>
 
-                  {/* Status Message */}
                   {loading && <p className="text-blue-600 font-bold animate-pulse">{uploadStatus}</p>}
                   {!loading && uploadStatus && (
                     <div className={`p-4 rounded-md ${uploadStatus.includes('Failed') ? 'bg-yellow-50 text-yellow-700' : 'bg-green-50 text-green-700'}`}>
