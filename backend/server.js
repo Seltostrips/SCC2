@@ -34,6 +34,7 @@ connectDB();
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/health', require('./routes/health'));
+app.use('/api/admin', require('./routes/admin'));
 
 // Socket.io setup
 io.on('connection', (socket) => {
@@ -54,3 +55,4 @@ app.set('io', io);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
