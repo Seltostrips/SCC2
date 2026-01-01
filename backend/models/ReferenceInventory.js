@@ -8,4 +8,4 @@ const ReferenceInventorySchema = new mongoose.Schema({
   systemQuantity: { type: Number, required: true } // "Quantity as on date of Sampling"
 });
 
-module.exports = mongoose.model('ReferenceInventory', ReferenceInventorySchema);
+module.exports = mongoose.models.ReferenceInventory || mongoose.model('ReferenceInventory', ReferenceInventorySchema);
