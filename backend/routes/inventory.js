@@ -1,235 +1,107 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
 const Inventory = require('../models/Inventory');
+const ReferenceInventory = require('../models/ReferenceInventory'); // <--- This was missing
 const User = require('../models/User');
-const notificationService = require('../services/notificationService');
-const mongoose = require('mongoose');
+const auth = require('../middleware/auth');
 
-// Middleware to check MongoDB connection
-const checkDBConnection = (req, res, next) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.status(503).json({ message: 'Database connection not established. Please try again later.' });
-  }
-  next();
-};
-
-// Create inventory entry
-router.post('/', [auth, checkDBConnection], async (req, res) => {
-  const { binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode } = req.body;
-  
+// 1. LOOKUP SKU ROUTE (Fixes "SKU Not Found" error)
+router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
-    console.log('Creating inventory entry:', req.body);
+    console.log(`Searching for SKU: ${req.params.skuId}`); // Debug log
+    const item = await ReferenceInventory.findOne({ skuId: req.params.skuId });
     
-    // Find client with matching uniqueCode and pincode
-    const client = await User.findOne({ 
-      role: 'client', 
-      uniqueCode, 
-      'location.pincode': pincode 
-    });
-    
-    if (!client) {
-      return res.status(400).json({ message: 'No client found with this unique code and pincode combination' });
+    if (!item) {
+      console.log('SKU not found in DB');
+      return res.status(404).json({ message: 'SKU not found' });
     }
     
-    const newEntry = new Inventory({
-      binId,
-      bookQuantity,
-      actualQuantity,
-      notes,
-      location,
-      uniqueCode,
-      pincode,
-      staffId: req.user.id,
-      clientId: client._id
-    });
-    
-    // Calculate discrepancy and set status
-    const discrepancy = Math.abs(bookQuantity - actualQuantity);
-    newEntry.discrepancy = discrepancy;
-    
-    if (discrepancy === 0) {
-      newEntry.status = 'auto-approved';
-      newEntry.timestamps.finalStatus = new Date();
-    } else {
-      newEntry.status = 'pending-client';
-    }
-    
-    await newEntry.save();
-    
-    console.log('Entry created with status:', newEntry.status);
-    
-    // If status is pending-client, notify specific client
-    if (newEntry.status === 'pending-client') {
-      // Emit real-time notification via Socket.io
-      const io = req.app.get('io');
-      if (io) {
-        console.log('Emitting new-pending-entry event to specific client');
-        io.emit(`new-pending-entry-${client._id}`, newEntry);
-      }
-      
-      // Send email/WhatsApp notification to specific client
-      await notificationService.notifyClient(client, newEntry);
-    }
-    
-    res.status(201).json(newEntry);
+    res.json(item);
   } catch (err) {
-    console.error('Error creating inventory entry:', err);
-    res.status(500).send('Server error');
+    console.error('Lookup Error:', err);
+    res.status(500).send('Server Error');
   }
 });
 
-// Get pending entries for specific client
-router.get('/pending', [auth, checkDBConnection], async (req, res) => {
+// 2. GET CLIENTS BY LOCATION (For the dropdown)
+router.get('/clients-by-location', auth, async (req, res) => {
   try {
-    if (req.user.role !== 'client' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized' });
-    }
-    
-    let query = { status: 'pending-client' };
-    
-    // If client, only show their entries
-    if (req.user.role === 'client') {
-      query.clientId = req.user._id;
-    }
-    
-    const pendingEntries = await Inventory.find(query)
-      .populate('staffId', 'name')
-      .populate('clientId', 'name')
-      .sort({ 'timestamps.staffEntry': -1 });
-    
-    res.json(pendingEntries);
-  } catch (err) {
-    console.error('Error fetching pending entries:', err);
-    res.status(500).send('Server error');
-  }
-});
-
-// Get unique codes for dropdown (staff only)
-router.get('/unique-codes', [auth, checkDBConnection], async (req, res) => {
-  try {
-    if (req.user.role !== 'staff') {
-      return res.status(403).json({ message: 'Not authorized' });
-    }
-    
-    const clients = await User.find({ role: 'client', isApproved: true })
-      .select('uniqueCode company location.pincode');
-    
+    const { location } = req.query;
+    // Find clients mapped to this location
+    const clients = await User.find({ role: 'client', mappedLocation: location });
     res.json(clients);
   } catch (err) {
-    console.error('Error fetching unique codes:', err);
-    res.status(500).send('Server error');
+    console.error(err);
+    res.status(500).send('Server Error');
   }
 });
 
-// Client response to inventory entry
-router.post('/:id/respond', [auth, checkDBConnection], async (req, res) => {
-  const { action, comment } = req.body;
-  
+// 3. SUBMIT INVENTORY (New Logic with Counts & ODIN)
+router.post('/', auth, async (req, res) => {
   try {
-    if (req.user.role !== 'client' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized' });
+    const { 
+      skuId, skuName, location, counts, odin, assignedClientId 
+    } = req.body;
+
+    console.log('Submitting Inventory:', skuId, location);
+
+    // Calculate Audit Result
+    let auditResult = 'Match';
+    if (counts.totalIdentified > odin.maxQuantity) auditResult = 'Excess';
+    else if (counts.totalIdentified < odin.minQuantity) auditResult = 'Shortfall';
+
+    // Determine Status
+    let status = 'auto-approved';
+    if (auditResult !== 'Match') status = 'pending-client';
+
+    const newEntry = new Inventory({
+      skuId,
+      skuName,
+      location,
+      counts,
+      odin,
+      auditResult,
+      status,
+      staffId: req.user.id,
+      assignedClientId: (status === 'pending-client') ? assignedClientId : undefined
+    });
+
+    await newEntry.save();
+    
+    // Real-time Notification (Socket.io)
+    const io = req.app.get('io');
+    if (io && status === 'pending-client' && assignedClientId) {
+       io.to('client').emit('new-discrepancy', {
+         assignedClientId: assignedClientId,
+         skuId: skuId,
+         auditResult: auditResult
+       });
     }
-    
-    const entry = await Inventory.findById(req.params.id);
-    
-    if (!entry) {
-      return res.status(404).json({ message: 'Entry not found' });
-    }
-    
-    // Clients can only respond to their own entries
-    if (req.user.role === 'client' && entry.clientId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to respond to this entry' });
-    }
-    
-    if (entry.status !== 'pending-client') {
-      return res.status(400).json({ message: 'Entry is not pending client review' });
-    }
-    
-    entry.clientId = req.user.id;
-    entry.timestamps.clientResponse = new Date();
-    entry.clientResponse = {
-      action,
-      comment: comment || ''
-    };
-    
-    if (action === 'approved') {
-      entry.status = 'client-approved';
-      entry.timestamps.finalStatus = new Date();
-    } else if (action === 'rejected') {
-      entry.status = 'recount-required';
-    }
-    
-    await entry.save();
-    
-    console.log('Entry updated with status:', entry.status);
-    
-    // Notify staff about the response
-    if (action === 'rejected') {
-      await notificationService.notifyStaff(entry, 'Recount required for inventory entry');
-      
-      // Emit real-time notification via Socket.io
-      const io = req.app.get('io');
-      if (io) {
-        console.log('Emitting entry-updated event to staff');
-        io.emit(`entry-updated-${entry.staffId}`, entry);
-      }
-    }
-    
-    res.json(entry);
+
+    res.json(newEntry);
   } catch (err) {
-    console.error('Error responding to inventory entry:', err);
-    res.status(500).send('Server error');
+    console.error('Submit Error:', err);
+    res.status(500).send('Server Error');
   }
 });
 
-// Get all entries (for admin)
-router.get('/', [auth, checkDBConnection], async (req, res) => {
+// 4. GET PENDING ENTRIES (For Client Dashboard)
+router.get('/pending', auth, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized' });
-    }
-    
-    const { startDate, endDate, location, staff, uniqueCode, pincode } = req.query;
-    
-    let query = {};
-    
-    if (startDate && endDate) {
-      query['timestamps.staffEntry'] = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
-    
-    if (location) {
-      query.location = location;
-    }
-    
-    if (staff) {
-      // Find staff by name
-      const staffUser = await User.findOne({ name: { $regex: staff, $options: 'i' }, role: 'staff' });
-      if (staffUser) {
-        query.staffId = staffUser._id;
-      }
-    }
-    
-    if (uniqueCode) {
-      query.uniqueCode = uniqueCode;
-    }
-    
-    if (pincode) {
-      query.pincode = pincode;
+    // If client, only show their specific assignments
+    const query = { status: 'pending-client' };
+    if (req.user.role === 'client') {
+      query.assignedClientId = req.user.id;
     }
     
     const entries = await Inventory.find(query)
       .populate('staffId', 'name')
-      .populate('clientId', 'name')
-      .sort({ 'timestamps.staffEntry': -1 });
-    
+      .sort({ 'timestamps.entry': -1 });
+      
     res.json(entries);
   } catch (err) {
-    console.error('Error fetching entries:', err);
-    res.status(500).send('Server error');
+    console.error(err);
+    res.status(500).send('Server Error');
   }
 });
 
