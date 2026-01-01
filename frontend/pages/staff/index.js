@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useRouter } from 'next/router';
 import withAuth from '../../components/withAuth';
 
 function StaffDashboard({ user }) {
+  const router = useRouter();
+  
   // --- STATE ---
   const [skuSearch, setSkuSearch] = useState('');
   const [lookupResult, setLookupResult] = useState(null);
-  const [location, setLocation] = useState('');
+  const [activeLocation, setActiveLocation] = useState(''); // FROM LOGIN SELECTION
   const [notes, setNotes] = useState('');
   
   // Detailed Counts
@@ -15,10 +18,7 @@ function StaffDashboard({ user }) {
   });
   
   // ODIN Inputs
-  const [odinInputs, setOdinInputs] = useState({
-    minQuantity: 0, 
-    blocked: 0      
-  });
+  const [odinInputs, setOdinInputs] = useState({ minQuantity: 0, blocked: 0 });
 
   // Client Selection
   const [availableClients, setAvailableClients] = useState([]);
@@ -30,27 +30,29 @@ function StaffDashboard({ user }) {
   const [message, setMessage] = useState('');
   const [history, setHistory] = useState([]);
 
+  // Get API URL Helper
   const getApiUrl = (endpoint) => {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
     return `${baseUrl.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
   };
 
+  // INITIAL LOAD
   useEffect(() => {
-    fetchHistory();
-  }, []);
-
-  // AUTO-FETCH CLIENTS when "Location" field changes
-  useEffect(() => {
-    if (location && location.trim().length > 1) {
-      // Use a debounce or just simple check to avoid too many calls
-      const timer = setTimeout(() => {
-         fetchClientsByLocation(location);
-      }, 500);
-      return () => clearTimeout(timer);
-    } else {
-      setAvailableClients([]);
+    // 1. Check for Active Location (Security)
+    const loc = localStorage.getItem('activeLocation');
+    if (!loc) {
+        alert('No location selected. Redirecting...');
+        router.push('/staff/select-location');
+        return;
     }
-  }, [location]);
+    setActiveLocation(loc);
+
+    // 2. Fetch History
+    fetchHistory();
+
+    // 3. Pre-fetch Clients for this location
+    fetchClientsByLocation(loc);
+  }, []);
 
   const fetchHistory = async () => {
     try {
@@ -65,7 +67,6 @@ function StaffDashboard({ user }) {
   const fetchClientsByLocation = async (loc) => {
     try {
       const token = localStorage.getItem('token');
-      // Encode URI component to handle spaces (e.g., "Noida WH") correctly
       const res = await axios.get(getApiUrl(`/api/inventory/clients-by-location?location=${encodeURIComponent(loc)}`), {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -75,15 +76,10 @@ function StaffDashboard({ user }) {
 
   // --- CALCULATIONS ---
   const totalIdentified = 
-    (parseInt(counts.picking) || 0) + 
-    (parseInt(counts.bulk) || 0) + 
-    (parseInt(counts.nearExpiry) || 0) + 
-    (parseInt(counts.jit) || 0) + 
-    (parseInt(counts.damaged) || 0);
+    (parseInt(counts.picking)||0) + (parseInt(counts.bulk)||0) + (parseInt(counts.nearExpiry)||0) + 
+    (parseInt(counts.jit)||0) + (parseInt(counts.damaged)||0);
 
-  const totalSystem = 
-    (parseInt(odinInputs.minQuantity) || 0) + 
-    (parseInt(odinInputs.blocked) || 0);
+  const totalSystem = (parseInt(odinInputs.minQuantity)||0) + (parseInt(odinInputs.blocked)||0);
 
   const discrepancy = totalIdentified - totalSystem;
   let auditStatus = 'Match';
@@ -98,11 +94,10 @@ function StaffDashboard({ user }) {
     setLookupResult(null);
     setMessage('');
     
-    // Reset form
+    // Reset inputs but KEEP location
     setCounts({ picking: 0, bulk: 0, nearExpiry: 0, jit: 0, damaged: 0 });
     setOdinInputs({ minQuantity: 0, blocked: 0 });
     setSelectedClientId('');
-    // Note: We do NOT reset location here if you want it to persist between scans
 
     try {
       const token = localStorage.getItem('token');
@@ -110,8 +105,6 @@ function StaffDashboard({ user }) {
         headers: { Authorization: `Bearer ${token}` }
       });
       setLookupResult(res.data);
-      // If ODIN has a pickingLocation, auto-fill it (which triggers client fetch)
-      if (res.data.pickingLocation) setLocation(res.data.pickingLocation);
     } catch (err) {
       setMessage('SKU not found in Reference Database.');
     } finally {
@@ -131,23 +124,20 @@ function StaffDashboard({ user }) {
       const payload = {
         skuId: lookupResult.skuId,
         skuName: lookupResult.name,
-        location,
+        location: activeLocation, // <--- FORCED LOCATION
         counts,
         odin: odinInputs,
         assignedClientId: isObjection ? selectedClientId : null,
         notes
       };
 
-      const res = await axios.post(getApiUrl('/api/inventory'), payload, {
+      await axios.post(getApiUrl('/api/inventory'), payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       setMessage(isObjection ? 'Objection Raised! Sent to Client.' : 'Success! Entry Auto-Approved.');
-      
-      // Clear specific fields
       setSkuSearch('');
       setLookupResult(null);
-      // Keep location for next item (common workflow)
       fetchHistory();
     } catch (err) {
       console.error(err);
@@ -168,7 +158,14 @@ function StaffDashboard({ user }) {
         
         {/* === PART 1: MAIN FORM === */}
         <div className="bg-white p-6 rounded-lg shadow-lg">
-          <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">Staff Inventory Entry</h2>
+          <div className="flex justify-between items-center mb-6 border-b pb-4">
+             <h2 className="text-2xl font-bold text-gray-800">Staff Inventory Entry</h2>
+             <div className="text-right">
+                <p className="text-sm text-gray-500">Working Location:</p>
+                <p className="font-bold text-indigo-600 text-lg">{activeLocation}</p>
+                <button onClick={() => router.push('/staff/select-location')} className="text-xs text-indigo-400 hover:text-indigo-600 underline">Change Location</button>
+             </div>
+          </div>
           
           {message && (
             <div className={`mb-4 p-3 rounded text-center font-bold ${message.includes('Success') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
@@ -177,7 +174,7 @@ function StaffDashboard({ user }) {
           )}
 
           {/* SEARCH */}
-          <form onSubmit={handleSearch} className="flex gap-4 mb-6 border-b pb-6">
+          <form onSubmit={handleSearch} className="flex gap-4 mb-6">
             <input
               type="text"
               placeholder="Scan or Enter SKU ID..."
@@ -199,24 +196,15 @@ function StaffDashboard({ user }) {
             <div className="animate-fade-in space-y-6">
               
               {/* Info Header */}
-              <div className="bg-blue-50 p-4 rounded grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-blue-900">
+              <div className="bg-blue-50 p-4 rounded grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-900">
                 <div><span className="font-bold">Name:</span> {lookupResult.name}</div>
                 <div><span className="font-bold">System Qty:</span> {lookupResult.systemQuantity}</div>
-                <div>
-                  <span className="font-bold">Location:</span> 
-                  <input 
-                    type="text" 
-                    value={location} 
-                    onChange={e => setLocation(e.target.value)}
-                    className="ml-2 p-1 border rounded w-32 font-semibold"
-                    placeholder="Enter Loc"
-                  />
-                </div>
+                <div><span className="font-bold">Picking Loc:</span> {lookupResult.pickingLocation}</div>
+                <div><span className="font-bold">Bulk Loc:</span> {lookupResult.bulkLocation}</div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                
-                {/* LEFT: STAFF COUNTS */}
+                {/* COUNTS */}
                 <div className="bg-gray-50 p-4 rounded border">
                   <h3 className="font-bold text-gray-700 mb-4 border-b pb-2">1. Physical Count</h3>
                   <div className="space-y-3">
@@ -224,9 +212,7 @@ function StaffDashboard({ user }) {
                       <div key={field} className="flex justify-between items-center">
                         <label className="capitalize text-gray-600 w-1/2">{field.replace(/([A-Z])/g, ' $1').trim()}</label>
                         <input 
-                          type="number" 
-                          min="0"
-                          value={counts[field]}
+                          type="number" min="0" value={counts[field]}
                           onChange={e => setCounts({...counts, [field]: parseInt(e.target.value) || 0})}
                           className="w-24 p-2 border rounded text-right font-mono"
                         />
@@ -239,16 +225,14 @@ function StaffDashboard({ user }) {
                   </div>
                 </div>
 
-                {/* RIGHT: ODIN INPUTS */}
+                {/* ODIN */}
                 <div className="bg-gray-50 p-4 rounded border">
                   <h3 className="font-bold text-gray-700 mb-4 border-b pb-2">2. ODIN Data</h3>
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <label className="text-gray-600 w-1/2">Qty per ODIN (Min)</label>
                       <input 
-                        type="number" 
-                        min="0"
-                        value={odinInputs.minQuantity}
+                        type="number" min="0" value={odinInputs.minQuantity}
                         onChange={e => setOdinInputs({...odinInputs, minQuantity: parseInt(e.target.value) || 0})}
                         className="w-24 p-2 border rounded text-right font-mono"
                       />
@@ -256,9 +240,7 @@ function StaffDashboard({ user }) {
                     <div className="flex justify-between items-center">
                       <label className="text-gray-600 w-1/2">Blocked Qty</label>
                       <input 
-                        type="number" 
-                        min="0"
-                        value={odinInputs.blocked}
+                        type="number" min="0" value={odinInputs.blocked}
                         onChange={e => setOdinInputs({...odinInputs, blocked: parseInt(e.target.value) || 0})}
                         className="w-24 p-2 border rounded text-right font-mono"
                       />
@@ -280,7 +262,7 @@ function StaffDashboard({ user }) {
                   )}
                 </div>
 
-                {/* BUTTONS LOGIC */}
+                {/* BUTTONS */}
                 {auditStatus === 'Match' ? (
                   <button
                     onClick={() => handleSubmit(false)}
@@ -292,22 +274,23 @@ function StaffDashboard({ user }) {
                 ) : (
                   <div className="space-y-3">
                      <div>
-                        <label className="block text-sm font-bold text-red-700 mb-1">Raise Objection To:</label>
+                        <label className="block text-sm font-bold text-red-700 mb-1">
+                           Select Client for "{activeLocation}":
+                        </label>
                         <select 
                           className="w-full p-2 border border-red-300 rounded"
                           value={selectedClientId}
                           onChange={e => setSelectedClientId(e.target.value)}
                         >
-                          {/* UPDATED: Dynamic Options based on "availableClients" */}
-                          <option value="">-- Select Client Staff at "{location}" --</option>
+                          <option value="">-- Select Client --</option>
                           {availableClients.map(c => (
                             <option key={c._id} value={c._id}>
-                              {c.name} ({c.uniqueCode || 'No Code'}) - {c.company}
+                              {c.name} ({c.uniqueCode || 'No Code'})
                             </option>
                           ))}
                         </select>
-                        {availableClients.length === 0 && location.length > 2 && (
-                          <p className="text-xs text-red-500 mt-1">* No client staff found for "{location}". Ensure correct location spelling.</p>
+                        {availableClients.length === 0 && (
+                          <p className="text-xs text-red-500 mt-1">* No clients mapped to {activeLocation}.</p>
                         )}
                      </div>
                      <button
