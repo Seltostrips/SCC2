@@ -28,26 +28,43 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (Fixed for Multi-Location Array)
+// 2. GET CLIENTS BY LOCATION (FIXED: Fuzzy + Debug)
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
-    if (!location) return res.json([]);
+    // Decode in case it comes in encoded (though express usually handles this)
+    const cleanLocation = decodeURIComponent(location).trim();
+    
+    if (!cleanLocation) return res.json([]);
 
-    console.log(`Searching for clients mapped to: "${location}"`);
+    console.log(`[DEBUG] Searching for clients in: "${cleanLocation}"`);
 
-    // Search logic:
-    // 1. Check if 'locations' array contains the exact string "Noida WH"
-    // 2. Check if legacy 'mappedLocation' string contains "Noida WH"
+    // ROBUST QUERY STRATEGY:
+    // 1. Locations Array: Check if ANY element matches case-insensitive regex
+    // 2. MappedLocation String: Check if string contains the location
     const clients = await User.find({ 
         role: 'client', 
         $or: [
-            { locations: location }, 
-            { mappedLocation: { $regex: location, $options: 'i' } }
+            // Matches ["Noida WH", "Delhi"] if search is "noida wh"
+            { locations: { $elemMatch: { $regex: new RegExp(`^${cleanLocation}$`, 'i') } } },
+            // Exact match fallback
+            { locations: cleanLocation },
+            // Legacy string match
+            { mappedLocation: { $regex: cleanLocation, $options: 'i' } }
         ]
     }).select('name company uniqueCode locations mappedLocation');
     
-    console.log(`Found ${clients.length} clients.`);
+    console.log(`[DEBUG] Found ${clients.length} clients for "${cleanLocation}"`);
+    // Debug: print names found
+    if (clients.length > 0) {
+        console.log(`[DEBUG] Matches: ${clients.map(c => c.name).join(', ')}`);
+    } else {
+        // If 0 found, perform a "Wildcard" check to see if ANY clients exist at all
+        // This helps diagnose if the issue is the query or the data
+        const allClients = await User.countDocuments({ role: 'client' });
+        console.log(`[DEBUG] Total Clients in DB: ${allClients} (but 0 matched location)`);
+    }
+
     res.json(clients);
   } catch (err) {
     console.error('Client Search Error:', err);
