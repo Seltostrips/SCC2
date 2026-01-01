@@ -4,11 +4,11 @@ const User = require('../models/User');
 const ReferenceInventory = require('../models/ReferenceInventory');
 const auth = require('../middleware/auth');
 
-// Upload Inventory DB (Change 1)
+// Upload Inventory DB
 router.post('/upload-inventory', auth, async (req, res) => {
   try {
-    const items = req.body; // Expects JSON array
-    // Bulk write for performance (update if exists, insert if new)
+    const items = req.body;
+    // Bulk write for performance
     const operations = items.map(item => ({
       updateOne: {
         filter: { skuId: item.skuId },
@@ -24,7 +24,7 @@ router.post('/upload-inventory', auth, async (req, res) => {
   }
 });
 
-// Upload Staff Assignments (Change 2)
+// Upload Staff Assignments
 router.post('/assign-staff', auth, async (req, res) => {
   try {
     const users = req.body;
@@ -50,7 +50,7 @@ router.post('/assign-staff', auth, async (req, res) => {
   }
 });
 
-// Upload Client Assignments (Change 3)
+// Upload Client Assignments
 router.post('/assign-client', auth, async (req, res) => {
   try {
     const users = req.body;
