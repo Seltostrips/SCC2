@@ -17,7 +17,7 @@ function AdminDashboard() {
   const [editingUser, setEditingUser] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', loginPin: '', locationsStr: '' });
 
-  // -- API HELPER (Preserved Feature: Safe URL handling) --
+  // -- API HELPER --
   const getApiUrl = (endpoint) => {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
     return `${baseUrl.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
@@ -37,7 +37,8 @@ function AdminDashboard() {
         });
         setInventory(res.data);
       } else if (activeTab === 'users') {
-        const res = await axios.get(getApiUrl('/api/auth/users'), {
+        // Use the restored admin route
+        const res = await axios.get(getApiUrl('/api/admin/users'), {
           headers: { Authorization: `Bearer ${token}` }
         });
         setUsers(res.data);
@@ -47,11 +48,10 @@ function AdminDashboard() {
     }
   };
 
-  // -- NEW FEATURE: DOWNLOAD AUDIT REPORT --
+  // -- DOWNLOAD REPORT --
   const handleDownloadReport = () => {
     if (inventory.length === 0) return alert('No data to download');
 
-    // Maps columns exactly as requested
     const csvData = inventory.map(item => ({
         'SKU ID': item.skuId,
         'Name': item.skuName,
@@ -60,8 +60,8 @@ function AdminDashboard() {
         'Quantity as per Odin (Min)': item.odinMin,
         'Staff Name': item.staffName,
         'Status': item.status,
-        'Client Name': item.clientName !== '-' ? item.clientName : '',
-        'comments by client': item.clientComment !== '-' ? item.clientComment : '',
+        'Client Name': item.clientName,
+        'comments by client': item.clientComment,
         'Audit Result': item.auditResult,
         'Physical Count': item.physicalCount,
         'Discrepancy': item.physicalCount - item.odinMax,
@@ -72,13 +72,13 @@ function AdminDashboard() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', `Audit_Report_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `Audit_Report.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // -- EDIT USER LOGIC (Preserved) --
+  // -- EDIT USER LOGIC --
   const handleEditClick = (user) => {
     setEditingUser(user);
     setEditForm({
@@ -91,7 +91,6 @@ function AdminDashboard() {
   const handleEditSave = async () => {
       try {
           const token = localStorage.getItem('token');
-          // Split string back into array (Preserved Logic)
           const locArray = editForm.locationsStr.split(',').map(s => s.trim()).filter(s => s);
           
           await axios.put(getApiUrl(`/api/auth/users/${editingUser._id}`), {
@@ -106,12 +105,12 @@ function AdminDashboard() {
       } catch (err) { alert('Failed to update user'); }
   };
 
-  // -- TEMPLATE DOWNLOAD (Preserved Headers) --
+  // -- TEMPLATE DOWNLOAD --
   const handleDownloadTemplate = () => {
     let headers = [];
     let filename = '';
     if (uploadType === 'inventory') {
-      headers = ['SKU ID', 'Name of the SKU ID', 'Picking Location', 'Bulk Location', 'Quantity as on the date of Sampling'];
+      headers = ['skuId', 'name', 'pickingLocation', 'bulkLocation', 'systemQuantity'];
       filename = 'inventory_template.csv';
     } else {
       headers = ['Staff ID', 'Login PIN', 'Name', 'Location1', 'Location2', 'Location3', 'Location4', 'Location5', 'Location6'];
@@ -126,7 +125,7 @@ function AdminDashboard() {
     document.body.removeChild(link);
   };
 
-  // -- FILE UPLOAD (Preserved 6-Location Parsing) --
+  // -- FILE UPLOAD (Bulk Logic Restored) --
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -138,50 +137,62 @@ function AdminDashboard() {
       skipEmptyLines: true,
       complete: async (results) => {
         const token = localStorage.getItem('token');
-        let success=0, fail=0, updateCount=0;
+        const rows = results.data;
         
-        if (uploadType === 'inventory') {
-             for (const row of results.data) {
-                if(!row['SKU ID']) continue;
-                try {
-                    await axios.post(getApiUrl('/api/admin/upload-inventory'), {
-                        skuId: row['SKU ID'],
-                        name: row['Name of the SKU ID'],
-                        pickingLocation: row['Picking Location'],
-                        bulkLocation: row['Bulk Location'],
-                        systemQuantity: parseFloat(row['Quantity as on the date of Sampling']) || 0
-                    }, { headers: { Authorization: `Bearer ${token}` } });
-                    success++;
-                } catch (e) { fail++; }
-             }
-        } else {
-           for (const row of results.data) {
-             if(!row['Staff ID'] && !row['Client ID']) continue;
-             try {
-               // Location1..Location6 parsing preserved here
-               const locArray = [];
-               for (let i = 1; i <= 6; i++) {
-                 if (row[`Location${i}`]?.trim()) locArray.push(row[`Location${i}`].trim());
-               }
+        try {
+            // A. INVENTORY UPLOAD
+            if (uploadType === 'inventory') {
+                 // Map CSV headers to Schema fields
+                 const payload = rows.map(row => ({
+                    skuId: row['skuId'] || row['SKU ID'],
+                    name: row['name'] || row['Name of the SKU ID'],
+                    pickingLocation: row['pickingLocation'] || row['Picking Location'],
+                    bulkLocation: row['bulkLocation'] || row['Bulk Location'],
+                    // Handle "Quantity as on..." or "systemQuantity"
+                    systemQuantity: parseFloat(row['systemQuantity'] || row['Quantity as on the date of Sampling'] || 0)
+                 })).filter(i => i.skuId);
+
+                 await axios.post(getApiUrl('/api/admin/upload-inventory'), payload, {
+                    headers: { Authorization: `Bearer ${token}` }
+                 });
+                 setUploadStatus(`Success! Uploaded ${payload.length} items.`);
+            } 
+            
+            // B. STAFF / CLIENT UPLOAD
+            else {
+               // Map CSV headers to User Schema
+               const payload = rows.map(row => {
+                   const locArray = [];
+                   for (let i = 1; i <= 6; i++) {
+                     if (row[`Location${i}`]?.trim()) locArray.push(row[`Location${i}`].trim());
+                   }
+                   
+                   return {
+                       uniqueCode: row['Staff ID'] || row['Client ID'],
+                       loginPin: row['Login PIN'],
+                       name: row['Name'],
+                       locations: locArray,
+                       mappedLocation: locArray.join(', ')
+                   };
+               }).filter(u => u.uniqueCode); // Filter out empty rows
+
+               const endpoint = uploadType === 'staff' ? '/api/admin/assign-staff' : '/api/admin/assign-client';
                
-               const res = await axios.post(getApiUrl('/api/auth/register'), {
-                 name: row['Name'],
-                 uniqueCode: row['Staff ID'] || row['Client ID'],
-                 loginPin: row['Login PIN'],
-                 role: uploadType,
-                 locations: locArray,
-                 mappedLocation: locArray.join(', ')
-               }, { headers: { Authorization: `Bearer ${token}` } });
-               
-               if(res.data.type === 'update') updateCount++;
-               else success++;
-             } catch (e) { fail++; }
-           }
+               await axios.post(getApiUrl(endpoint), payload, {
+                  headers: { Authorization: `Bearer ${token}` }
+               });
+               setUploadStatus(`Success! Updated ${payload.length} ${uploadType}s.`);
+            }
+            
+            if (activeTab === 'users') fetchData();
+
+        } catch (err) {
+            console.error(err);
+            setUploadStatus('Upload Failed. Check console for details.');
+        } finally {
+            setLoading(false);
+            e.target.value = null;
         }
-        setLoading(false);
-        setUploadStatus(`Done! Created: ${success}, Updated: ${updateCount}, Failed: ${fail}`);
-        e.target.value = null;
-        if (activeTab === 'users') fetchData();
       }
     });
   };
@@ -208,7 +219,7 @@ function AdminDashboard() {
       <div className="py-10">
         <main className="max-w-7xl mx-auto sm:px-6 lg:px-8">
           
-          {/* TAB 1: MONITOR + REPORT BUTTON */}
+          {/* TAB 1: MONITOR */}
           {activeTab === 'monitor' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
               <div className="px-4 py-5 sm:px-6 flex justify-between items-center">
@@ -251,7 +262,7 @@ function AdminDashboard() {
             </div>
           )}
 
-          {/* TAB 2: USERS + EDIT BUTTON */}
+          {/* TAB 2: USERS */}
           {activeTab === 'users' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
               <div className="px-4 py-5 sm:px-6"><h3 className="text-lg leading-6 font-medium text-gray-900">System Users</h3></div>
@@ -272,11 +283,7 @@ function AdminDashboard() {
                           <td className="px-6 py-4 text-sm font-medium text-gray-900">{u.name}</td>
                           <td className="px-6 py-4 text-sm text-gray-500 capitalize">{u.role}</td>
                           <td className="px-6 py-4 text-sm text-gray-500 font-mono">{u.uniqueCode}</td>
-                          <td className="px-6 py-4 text-sm text-gray-500">
-                             {u.locations && u.locations.length > 0 
-                               ? u.locations.map(l => <span key={l} className="inline-block bg-gray-100 rounded px-2 py-1 text-xs mr-1 mb-1">{l}</span>) 
-                               : '-'}
-                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-500">{u.locations?.join(', ') || '-'}</td>
                           <td className="px-6 py-4 text-right text-sm font-medium"><button onClick={() => handleEditClick(u)} className="text-indigo-600 hover:text-indigo-900">Edit</button></td>
                         </tr>
                       ))}
@@ -303,7 +310,7 @@ function AdminDashboard() {
                   <div><button onClick={handleDownloadTemplate} className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">Download Template</button></div>
                   <div className="mt-4"><input type="file" accept=".csv" onChange={handleFileUpload} disabled={loading} className="mt-1 block w-full"/></div>
                   {loading && <p className="text-blue-600 font-bold animate-pulse">{uploadStatus}</p>}
-                  {!loading && uploadStatus && <div className={`p-4 rounded-md ${uploadStatus.includes('Failed') ? 'bg-yellow-50 text-yellow-700' : 'bg-green-50 text-green-700'}`}>{uploadStatus}</div>}
+                  {!loading && uploadStatus && <div className="p-4 bg-green-50 text-green-700 rounded-md">{uploadStatus}</div>}
                 </div>
               </div>
             </div>
@@ -326,7 +333,7 @@ function AdminDashboard() {
                     </div>
                     <div>
                        <label className="block text-sm font-bold text-gray-700">Login PIN</label>
-                       <input type="text" value={editForm.loginPin} onChange={e => setEditForm({...editForm, loginPin: e.target.value})} className="w-full border p-2 rounded" placeholder="New PIN"/>
+                       <input type="text" value={editForm.loginPin} onChange={e => setEditForm({...editForm, loginPin: e.target.value})} className="w-full border p-2 rounded" placeholder="New PIN (leave blank to keep)"/>
                     </div>
                     <div>
                        <label className="block text-sm font-bold text-gray-700">Locations (comma separated)</label>
