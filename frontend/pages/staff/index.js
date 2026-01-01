@@ -3,30 +3,41 @@ import axios from 'axios';
 import withAuth from '../../components/withAuth';
 
 function StaffDashboard({ user }) {
-  // Form State
-  const [formData, setFormData] = useState({
-    binId: '',
-    bookQuantity: '',
-    actualQuantity: '',
-    notes: '',
-    location: '',
-    uniqueCode: '',
-    pincode: ''
-  });
-  const [uniqueCodes, setUniqueCodes] = useState([]);
-  
-  // UI State
+  // --- STATE ---
+  // 1. Search & Lookup State
+  const [skuSearch, setSkuSearch] = useState('');
+  const [lookupResult, setLookupResult] = useState(null);
+  const [loadingLookup, setLoadingLookup] = useState(false);
+
+  // 2. Submission Form State
+  const [countInput, setCountInput] = useState('');
+  const [location, setLocation] = useState('');
+  const [notes, setNotes] = useState('');
+
+  // 3. UI/History State
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  // Data State for Sections
   const [history, setHistory] = useState([]);
+  const [uniqueCodes, setUniqueCodes] = useState([]); // For Client selection if needed
 
   useEffect(() => {
-    fetchUniqueCodes();
     fetchHistory();
+    fetchUniqueCodes();
   }, []);
+
+  // --- API CALLS ---
+
+  const fetchHistory = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/inventory/staff-history', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setHistory(res.data);
+    } catch (err) {
+      console.error('Error fetching history:', err);
+    }
+  };
 
   const fetchUniqueCodes = async () => {
     try {
@@ -40,151 +51,182 @@ function StaffDashboard({ user }) {
     }
   };
 
-  const fetchHistory = async () => {
+  // 1. LOOKUP SKU
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    if (!skuSearch.trim()) return;
+
+    setLoadingLookup(true);
+    setLookupResult(null);
+    setMessage('');
+
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/inventory/staff-history', {
+      // Call the "Old" Lookup Route
+      const res = await axios.get(`/api/inventory/lookup/${skuSearch}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setHistory(res.data);
-      setLoading(false);
+      setLookupResult(res.data);
     } catch (err) {
-      console.error('Error fetching history:', err);
-      setLoading(false);
+      console.error('Lookup error:', err);
+      setMessage('SKU not found in Reference Database (ODIN).');
+    } finally {
+      setLoadingLookup(false);
     }
   };
 
-  const { binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode } = formData;
+  // 2. SUBMIT INVENTORY (Old Format Payload)
+  const handleSubmit = async () => {
+    if (!countInput || !lookupResult) {
+      alert('Please enter a count and ensure SKU is looked up.');
+      return;
+    }
 
-  const onChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
-
-  const onUniqueCodeChange = (e) => {
-    const selectedCode = e.target.value;
-    const selectedClient = uniqueCodes.find(client => client.uniqueCode === selectedCode);
-    
-    setFormData({
-      ...formData,
-      uniqueCode: selectedCode,
-      pincode: selectedClient ? selectedClient.location.pincode : ''
-    });
-  };
-
-  const onSubmit = async (e) => {
-    e.preventDefault();
     setIsSubmitting(true);
-    setMessage('');
     
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.post('/api/inventory', formData, {
+      
+      // Construct the "Old" Payload Structure
+      const payload = {
+        skuId: lookupResult.skuId,
+        skuName: lookupResult.skuName, // Assuming ref DB has this
+        location: location,
+        counts: {
+          totalIdentified: parseInt(countInput, 10)
+        },
+        odin: {
+          minQuantity: lookupResult.minQuantity || 0,
+          maxQuantity: lookupResult.maxQuantity || 0,
+          // Pass other ref details if needed for backend validation
+        },
+        // We can attach the currently selected client code if your logic requires it,
+        // or let the backend handle it based on the "ODIN" match.
+      };
+
+      const res = await axios.post('/api/inventory', payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      
+
       if (res.data.status === 'auto-approved') {
-        setMessage('Entry auto-approved!');
+        setMessage('Success: Match! Entry Auto-Approved.');
       } else {
-        setMessage('Entry sent to client for review');
+        setMessage('Warning: Mismatch. Sent for Client Review.');
       }
-      
-      // Reset form & Refresh list
-      setFormData({
-        binId: '', bookQuantity: '', actualQuantity: '', notes: '',
-        location: '', uniqueCode: '', pincode: ''
-      });
-      fetchHistory(); // <--- Refresh sections immediately
-      
+
+      // Reset Form
+      setSkuSearch('');
+      setLookupResult(null);
+      setCountInput('');
+      setNotes('');
+      fetchHistory(); // Refresh the bottom sections
+
     } catch (err) {
-      console.error('Error submitting:', err);
-      setMessage(err.response?.data?.message || 'Error submitting entry');
+      console.error('Submit error:', err);
+      setMessage('Error submitting entry. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Filter sections
+  // --- SECTIONS FILTERING ---
   const pendingSection = history.filter(item => item.status === 'pending-client');
   const rejectedSection = history.filter(item => item.status === 'client-rejected');
   const matchedSection = history.filter(item => item.status === 'auto-approved' || item.status === 'client-approved');
-
-  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto space-y-8">
         
-        {/* SUBMISSION FORM */}
+        {/* --- PART 1: SKU LOOKUP FORM (The "Old" Format) --- */}
         <div className="bg-white p-8 rounded-lg shadow">
           <h2 className="text-2xl font-bold mb-6 text-center">Staff Inventory Entry</h2>
-          <p className="text-center mb-6">Staff: {user.name}</p>
           
           {message && (
-            <div className={`mb-4 p-3 rounded text-center ${message.includes('auto-approved') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+            <div className={`mb-4 p-3 rounded text-center ${message.includes('Success') ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
               {message}
             </div>
           )}
-          
-          <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="col-span-1">
-              <label className="block text-gray-700 font-medium mb-1">Rack/Bin ID</label>
-              <input type="text" name="binId" value={binId} onChange={onChange} className="w-full px-3 py-2 border rounded" required />
-            </div>
-            
-            <div className="col-span-1">
-               <label className="block text-gray-700 font-medium mb-1">Client Code</label>
-               <select name="uniqueCode" value={uniqueCode} onChange={onUniqueCodeChange} className="w-full px-3 py-2 border rounded" required>
-                 <option value="">Select a client</option>
-                 {uniqueCodes.map(c => (
-                   <option key={c._id} value={c.uniqueCode}>{c.company} - {c.uniqueCode}</option>
-                 ))}
-               </select>
-            </div>
 
-            <div className="col-span-1">
-              <label className="block text-gray-700 font-medium mb-1">Book Quantity</label>
-              <input type="number" name="bookQuantity" value={bookQuantity} onChange={onChange} className="w-full px-3 py-2 border rounded" required />
-            </div>
+          {/* A. SEARCH BAR */}
+          <form onSubmit={handleSearch} className="flex gap-4 mb-6">
+            <input
+              type="text"
+              placeholder="Scan or Enter SKU ID..."
+              className="flex-1 p-3 border border-gray-300 rounded shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+              value={skuSearch}
+              onChange={(e) => setSkuSearch(e.target.value)}
+            />
+            <button 
+              type="submit"
+              disabled={loadingLookup}
+              className="bg-indigo-600 text-white px-6 py-3 rounded hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {loadingLookup ? 'Searching...' : 'Search'}
+            </button>
+          </form>
 
-            <div className="col-span-1">
-              <label className="block text-gray-700 font-medium mb-1">Actual Count</label>
-              <input type="number" name="actualQuantity" value={actualQuantity} onChange={onChange} className="w-full px-3 py-2 border rounded" required />
-            </div>
+          {/* B. LOOKUP RESULT & ENTRY */}
+          {lookupResult && (
+            <div className="border-t pt-6 animate-fade-in">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div className="bg-gray-50 p-4 rounded">
+                  <h3 className="font-bold text-gray-700 mb-2">Reference Data (ODIN)</h3>
+                  <p><span className="font-semibold">SKU:</span> {lookupResult.skuId}</p>
+                  <p><span className="font-semibold">Name:</span> {lookupResult.skuName || 'N/A'}</p>
+                  <p><span className="font-semibold">Expected Range:</span> {lookupResult.minQuantity} - {lookupResult.maxQuantity}</p>
+                  <p><span className="font-semibold">Color/Size:</span> {lookupResult.color || '-'} / {lookupResult.size || '-'}</p>
+                </div>
 
-            <div className="col-span-1">
-              <label className="block text-gray-700 font-medium mb-1">Pincode</label>
-              <input type="text" name="pincode" value={pincode} readOnly className="w-full px-3 py-2 border rounded bg-gray-100" />
-            </div>
-            
-            <div className="col-span-1">
-              <label className="block text-gray-700 font-medium mb-1">Location</label>
-              <input type="text" name="location" value={location} onChange={onChange} className="w-full px-3 py-2 border rounded" />
-            </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-gray-700 font-medium mb-1">Your Count</label>
+                    <input 
+                      type="number" 
+                      className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500"
+                      value={countInput}
+                      onChange={(e) => setCountInput(e.target.value)}
+                      placeholder="Enter actual quantity"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 font-medium mb-1">Location</label>
+                    <input 
+                      type="text" 
+                      className="w-full p-2 border rounded"
+                      value={location}
+                      onChange={(e) => setLocation(e.target.value)}
+                      placeholder="e.g. Shelf A-1"
+                    />
+                  </div>
+                </div>
+              </div>
 
-            <div className="col-span-1 md:col-span-2">
-              <label className="block text-gray-700 font-medium mb-1">Notes</label>
-              <textarea name="notes" value={notes} onChange={onChange} className="w-full px-3 py-2 border rounded" rows="2"></textarea>
-            </div>
-            
-            <div className="col-span-1 md:col-span-2 mt-4">
-              <button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white py-3 rounded hover:bg-indigo-700 disabled:opacity-50">
-                {isSubmitting ? 'Submitting...' : 'Submit Entry'}
+              <button
+                onClick={handleSubmit}
+                disabled={isSubmitting}
+                className="w-full bg-green-600 text-white py-3 rounded font-bold hover:bg-green-700 disabled:opacity-50"
+              >
+                {isSubmitting ? 'Submitting...' : 'Submit Inventory Count'}
               </button>
             </div>
-          </form>
+          )}
         </div>
 
+        {/* --- PART 2: HISTORY SECTIONS (The "New" Requirement) --- */}
+        
         {/* SECTION 1: Pending Client Approval */}
         <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-400">
           <h3 className="text-xl font-bold mb-4 text-yellow-700">Pending Client Approval</h3>
           {pendingSection.length === 0 ? <p className="text-gray-500">No pending items.</p> : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead><tr className="bg-gray-100"><th className="p-2 text-left">Bin</th><th className="p-2 text-left">Code</th><th className="p-2 text-left">Discrepancy</th><th className="p-2 text-left">Date</th></tr></thead>
+                <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU/Bin</th><th className="p-2 text-left">Result</th><th className="p-2 text-left">Date</th></tr></thead>
                 <tbody>
                   {pendingSection.map(item => (
                     <tr key={item._id} className="border-b">
-                      <td className="p-2">{item.binId}</td>
-                      <td className="p-2">{item.uniqueCode}</td>
-                      <td className="p-2 text-red-600 font-bold">{item.discrepancy}</td>
+                      <td className="p-2">{item.skuId || item.binId}</td>
+                      <td className="p-2 text-yellow-600 font-medium">{item.auditResult || 'Mismatch'}</td>
                       <td className="p-2">{new Date(item.timestamps.staffEntry).toLocaleDateString()}</td>
                     </tr>
                   ))}
@@ -200,12 +242,11 @@ function StaffDashboard({ user }) {
           {rejectedSection.length === 0 ? <p className="text-gray-500">No rejected items.</p> : (
              <div className="overflow-x-auto">
              <table className="min-w-full text-sm">
-               <thead><tr className="bg-gray-100"><th className="p-2 text-left">Bin</th><th className="p-2 text-left">Code</th><th className="p-2 text-left">Reason</th></tr></thead>
+               <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU/Bin</th><th className="p-2 text-left">Reason</th></tr></thead>
                <tbody>
                  {rejectedSection.map(item => (
                    <tr key={item._id} className="border-b bg-red-50">
-                     <td className="p-2">{item.binId}</td>
-                     <td className="p-2">{item.uniqueCode}</td>
+                     <td className="p-2">{item.skuId || item.binId}</td>
                      <td className="p-2 italic">"{item.clientResponse?.comment || 'No comment'}"</td>
                    </tr>
                  ))}
@@ -221,12 +262,11 @@ function StaffDashboard({ user }) {
           {matchedSection.length === 0 ? <p className="text-gray-500">No matched items.</p> : (
             <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead><tr className="bg-gray-100"><th className="p-2 text-left">Bin</th><th className="p-2 text-left">Code</th><th className="p-2 text-left">Status</th></tr></thead>
+              <thead><tr className="bg-gray-100"><th className="p-2 text-left">SKU/Bin</th><th className="p-2 text-left">Status</th></tr></thead>
               <tbody>
                 {matchedSection.map(item => (
                   <tr key={item._id} className="border-b">
-                    <td className="p-2">{item.binId}</td>
-                    <td className="p-2">{item.uniqueCode}</td>
+                    <td className="p-2">{item.skuId || item.binId}</td>
                     <td className="p-2 text-green-600 font-medium">
                       {item.status === 'auto-approved' ? 'Auto Match' : 'Client Approved'}
                     </td>
