@@ -1,52 +1,54 @@
 const mongoose = require('mongoose');
 
-// 1. Define the Schema FIRST
 const InventorySchema = new mongoose.Schema({
   skuId: { type: String, required: true },
-  skuName: { type: String, required: true },
-  location: { type: String, required: true },
+  skuName: { type: String },
+  location: { type: String },
   
-  // Detailed Counts
+  // Detailed Counts Breakdown
   counts: {
     picking: { type: Number, default: 0 },
     bulk: { type: Number, default: 0 },
     nearExpiry: { type: Number, default: 0 },
     jit: { type: Number, default: 0 },
     damaged: { type: Number, default: 0 },
-    totalIdentified: { type: Number, required: true }
+    totalIdentified: { type: Number, required: true } // Sum of above
   },
 
-  // ODIN Data
+  // ODIN / System Data Breakdown
   odin: {
-    minQuantity: { type: Number, default: 0 },
-    blockedQuantity: { type: Number, default: 0 },
-    maxQuantity: { type: Number, default: 0 }
+    minQuantity: { type: Number, default: 0 }, // "Quantity as per ODIN"
+    blocked: { type: Number, default: 0 },     // "Blocked Quantity"
+    maxQuantity: { type: Number, required: true } // Sum of above
   },
 
-  // Results
-  auditResult: {
-    type: String,
+  auditResult: { 
+    type: String, 
     enum: ['Match', 'Excess', 'Shortfall'],
-    required: true
+    required: true 
   },
   
-  // Workflow
-  status: {
-    type: String,
+  status: { 
+    type: String, 
     enum: ['auto-approved', 'pending-client', 'client-approved', 'client-rejected'],
-    default: 'pending-client'
+    default: 'auto-approved' 
   },
   
   staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   assignedClientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  uniqueCode: { type: String },
+  notes: { type: String },
+  
+  clientResponse: {
+    action: String,
+    comment: String
+  },
   
   timestamps: {
-    entry: { type: Date, default: Date.now },
-    response: Date
-  },
-  clientResponse: { comment: String }
+    staffEntry: { type: Date, default: Date.now },
+    clientResponse: Date,
+    finalStatus: Date
+  }
 });
 
-// 2. Export the Model AFTER the schema is defined
-// The '||' check prevents the "OverwriteModelError" if the file is reloaded
 module.exports = mongoose.models.Inventory || mongoose.model('Inventory', InventorySchema);
