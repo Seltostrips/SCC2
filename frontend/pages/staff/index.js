@@ -2,219 +2,123 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import withAuth from '../../components/withAuth';
 
-function StaffDashboard({ user }) {
-  const [formData, setFormData] = useState({
-    binId: '',
-    bookQuantity: '',
-    actualQuantity: '',
-    notes: '',
-    location: '',
-    uniqueCode: '',
-    pincode: ''
-  });
-  const [message, setMessage] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [uniqueCodes, setUniqueCodes] = useState([]);
-  const [loading, setLoading] = useState(true);
+function StaffDashboard() {
+  const [location, setLocation] = useState('');
+  const [skuId, setSkuId] = useState('');
+  const [skuData, setSkuData] = useState(null);
+  const [counts, setCounts] = useState({ picking: 0, bulk: 0, nearExpiry: 0, jit: 0, damaged: 0 });
+  const [odin, setOdin] = useState({ min: 0, blocked: 0 });
+  
+  // Logic helpers
+  const total = Object.values(counts).reduce((a, b) => Number(a) + Number(b), 0);
+  const maxOdin = Number(odin.min) + Number(odin.blocked);
+  const isExcess = total > maxOdin;
+  const isShortfall = total < Number(odin.min);
+  const isDiscrepancy = isExcess || isShortfall;
+
+  // Client Selection
+  const [clients, setClients] = useState([]);
+  const [selectedClient, setSelectedClient] = useState('');
 
   useEffect(() => {
-    fetchUniqueCodes();
+    const loc = localStorage.getItem('activeLocation');
+    setLocation(loc);
   }, []);
 
-  const fetchUniqueCodes = async () => {
+  const fetchSku = async () => {
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/inventory/unique-codes', {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+      // You'll need to add this route to inventory.js on backend
+      const res = await axios.get(`/api/inventory/lookup/${skuId}`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      setUniqueCodes(res.data);
-      setLoading(false);
+      setSkuData(res.data);
+      
+      // Fetch available clients for this location
+      const clientRes = await axios.get(`/api/inventory/clients?location=${location}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setClients(clientRes.data);
     } catch (err) {
-      console.error('Error fetching unique codes:', err);
-      setLoading(false);
+      alert('SKU Not Found');
     }
   };
 
-  const { binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode } = formData;
-
-  const onChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
-
-  const onUniqueCodeChange = (e) => {
-    const selectedCode = e.target.value;
-    const selectedClient = uniqueCodes.find(client => client.uniqueCode === selectedCode);
-    
-    setFormData({
-      ...formData,
-      uniqueCode: selectedCode,
-      pincode: selectedClient ? selectedClient.location.pincode : ''
-    });
-  };
-
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setMessage('');
-    
+  const handleSubmit = async () => {
     try {
       const token = localStorage.getItem('token');
-      console.log('Submitting form with data:', formData);
-      
-      const res = await axios.post('/api/inventory', formData, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+      await axios.post('/api/inventory', {
+        skuId,
+        skuName: skuData.name,
+        location,
+        counts: { ...counts, totalIdentified: total },
+        odin: { minQuantity: odin.min, blockedQuantity: odin.blocked, maxQuantity: maxOdin },
+        assignedClientId: selectedClient
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      
-      console.log('Response:', res.data);
-      
-      if (res.data.status === 'auto-approved') {
-        setMessage('Entry auto-approved!');
-      } else {
-        setMessage('Entry sent to client for review');
-      }
-      
-      // Reset form
-      setFormData({
-        binId: '',
-        bookQuantity: '',
-        actualQuantity: '',
-        notes: '',
-        location: '',
-        uniqueCode: '',
-        pincode: ''
-      });
+      alert(isDiscrepancy ? 'Objection Raised!' : 'Approved!');
+      window.location.reload();
     } catch (err) {
-      console.error('Error submitting entry:', err);
-      setMessage(err.response?.data?.message || 'Error submitting entry');
-    } finally {
-      setIsSubmitting(false);
+      console.error(err);
+      alert('Error submitting');
     }
   };
 
-  if (loading) {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (!skuData) {
+    return (
+      <div className="p-8 max-w-md mx-auto">
+        <h1 className="text-xl font-bold mb-4">Location: {location}</h1>
+        <label>Enter SKU ID:</label>
+        <input className="w-full border p-2 mb-2" value={skuId} onChange={e => setSkuId(e.target.value)} />
+        <button onClick={fetchSku} className="bg-blue-600 text-white w-full py-2 rounded">Search</button>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md mx-auto bg-white p-8 rounded-lg shadow">
-        <h2 className="text-2xl font-bold mb-6 text-center">Staff Dashboard</h2>
-        <p className="text-center mb-6">Welcome, {user.name}</p>
-        
-        {message && (
-          <div className={`mb-4 p-3 rounded ${message.includes('auto-approved') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-            {message}
-          </div>
-        )}
-        
-        <form onSubmit={onSubmit}>
-          <div className="mb-4">
-            <label htmlFor="binId" className="block text-gray-700 font-medium mb-2">Rack/Bin ID</label>
-            <input
-              type="text"
-              id="binId"
-              name="binId"
-              value={binId}
-              onChange={onChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-            />
-          </div>
-          
-          <div className="mb-4">
-            <label htmlFor="bookQuantity" className="block text-gray-700 font-medium mb-2">Book Quantity</label>
-            <input
-              type="number"
-              id="bookQuantity"
-              name="bookQuantity"
-              value={bookQuantity}
-              onChange={onChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-            />
-          </div>
-          
-          <div className="mb-4">
-            <label htmlFor="actualQuantity" className="block text-gray-700 font-medium mb-2">Actual Count</label>
-            <input
-              type="number"
-              id="actualQuantity"
-              name="actualQuantity"
-              value={actualQuantity}
-              onChange={onChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-            />
-          </div>
-          
-          <div className="mb-4">
-            <label htmlFor="uniqueCode" className="block text-gray-700 font-medium mb-2">Client Code</label>
-            <select
-              id="uniqueCode"
-              name="uniqueCode"
-              value={uniqueCode}
-              onChange={onUniqueCodeChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-            >
-              <option value="">Select a client</option>
-              {uniqueCodes.map((client) => (
-                <option key={client._id} value={client.uniqueCode}>
-                  {client.company} - {client.uniqueCode} ({client.location.city})
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          <div className="mb-4">
-            <label htmlFor="pincode" className="block text-gray-700 font-medium mb-2">Pincode</label>
-            <input
-              type="text"
-              id="pincode"
-              name="pincode"
-              value={pincode}
-              onChange={onChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              required
-              readOnly
-            />
-          </div>
-          
-          <div className="mb-4">
-            <label htmlFor="location" className="block text-gray-700 font-medium mb-2">Location</label>
-            <input
-              type="text"
-              id="location"
-              name="location"
-              value={location}
-              onChange={onChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-          
-          <div className="mb-6">
-            <label htmlFor="notes" className="block text-gray-700 font-medium mb-2">Notes (optional)</label>
-            <textarea
-              id="notes"
-              name="notes"
-              value={notes}
-              onChange={onChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              rows="3"
-            ></textarea>
-          </div>
-          
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-          >
-            {isSubmitting ? 'Submitting...' : 'Submit'}
-          </button>
-        </form>
+    <div className="p-4 max-w-2xl mx-auto">
+      <div className="bg-gray-100 p-4 rounded mb-4">
+        <h2 className="font-bold text-lg">{skuData.name}</h2>
+        <p>Picking Loc: {skuData.pickingLocation} | Bulk Loc: {skuData.bulkLocation}</p>
+        <p>System Qty: {skuData.systemQuantity}</p>
       </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        {Object.keys(counts).map(k => (
+          <div key={k}>
+            <label className="capitalize text-sm">{k}</label>
+            <input type="number" className="w-full border p-1" 
+              value={counts[k]} onChange={e => setCounts({...counts, [k]: e.target.value})} />
+          </div>
+        ))}
+      </div>
+      <div className="text-right font-bold mb-4">Total Identified: {total}</div>
+
+      <div className="bg-yellow-50 p-4 rounded mb-4">
+        <h3 className="font-bold">ODIN Data</h3>
+        <label className="block mt-2">Min Quantity</label>
+        <input type="number" className="w-full border p-1" value={odin.min} onChange={e => setOdin({...odin, min: e.target.value})} />
+        <label className="block mt-2">Blocked Quantity</label>
+        <input type="number" className="w-full border p-1" value={odin.blocked} onChange={e => setOdin({...odin, blocked: e.target.value})} />
+        <p className="mt-2 font-bold">Max Quantity: {maxOdin}</p>
+      </div>
+
+      {isDiscrepancy && (
+        <div className="bg-red-50 p-4 border border-red-200 mb-4">
+          <p className="text-red-700 font-bold">Audit Query: {isExcess ? 'EXCESS' : 'SHORTFALL'}</p>
+          <label className="block mt-2">Raise objection to Client:</label>
+          <select className="w-full border p-2" value={selectedClient} onChange={e => setSelectedClient(e.target.value)}>
+            <option value="">Select Client Staff</option>
+            {clients.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      <button onClick={handleSubmit} disabled={isDiscrepancy && !selectedClient} 
+        className="w-full bg-green-600 text-white py-3 rounded disabled:bg-gray-400">
+        Submit Audit
+      </button>
     </div>
   );
 }
