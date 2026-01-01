@@ -1,10 +1,47 @@
 const express = require('express');
 const router = express.Router();
 const Inventory = require('../models/Inventory');
+const ReferenceInventory = require('../models/ReferenceInventory'); // Restored
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. GET UNIQUE CODES (For Staff Dropdown)
+// ==========================================
+// 1. LOOKUP & UTILITY ROUTES (Restored & New)
+// ==========================================
+
+// [Restored] Lookup SKU (Old System)
+router.get('/lookup/:skuId', auth, async (req, res) => {
+  try {
+    const skuId = req.params.skuId.trim();
+    console.log(`Lookup SKU: "${skuId}"`);
+
+    const item = await ReferenceInventory.findOne({ skuId: skuId });
+    
+    if (!item) {
+      console.log('SKU Not Found in DB');
+      return res.status(404).json({ message: 'SKU not found' });
+    }
+    
+    res.json(item);
+  } catch (err) {
+    console.error('Lookup Error:', err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// [Restored] Get Clients by Location (Old System)
+router.get('/clients-by-location', auth, async (req, res) => {
+  try {
+    const { location } = req.query;
+    const clients = await User.find({ role: 'client', mappedLocation: location });
+    res.json(clients);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// [New] Get Unique Codes (Required for NEW Staff Dashboard)
 router.get('/unique-codes', auth, async (req, res) => {
   try {
     const clients = await User.find({ role: 'client' }).select('company uniqueCode location');
@@ -15,7 +52,11 @@ router.get('/unique-codes', auth, async (req, res) => {
   }
 });
 
-// 2. GET PENDING ENTRIES (For CLIENTS ONLY)
+// ==========================================
+// 2. DASHBOARD DATA ROUTES (Client & Staff)
+// ==========================================
+
+// [Updated] Get Pending Entries (For Client Dashboard)
 router.get('/pending', auth, async (req, res) => {
   try {
     if (req.user.role !== 'client') {
@@ -27,8 +68,7 @@ router.get('/pending', auth, async (req, res) => {
       return res.status(400).json({ message: 'Client profile incomplete (missing Unique Code)' });
     }
 
-    console.log(`Fetching pending items for Client Code: "${clientUser.uniqueCode}"`);
-
+    // Find items matching this client's code that are pending
     const pendingItems = await Inventory.find({
       status: 'pending-client',
       uniqueCode: clientUser.uniqueCode 
@@ -36,7 +76,6 @@ router.get('/pending', auth, async (req, res) => {
     .populate('staffId', 'name')
     .sort({ 'timestamps.staffEntry': -1 });
 
-    console.log(`Found ${pendingItems.length} pending items.`);
     res.json(pendingItems);
   } catch (err) {
     console.error('Error fetching pending:', err);
@@ -44,14 +83,13 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// 3. GET STAFF HISTORY (New Route for the 3 Sections)
+// [New] Get Staff History (For Staff Dashboard - 3 Sections)
 router.get('/staff-history', auth, async (req, res) => {
   try {
     if (req.user.role !== 'staff') {
       return res.status(403).json({ message: 'Access denied. Staff only.' });
     }
 
-    // Fetch all entries by this staff member
     const entries = await Inventory.find({ staffId: req.user.id })
       .sort({ 'timestamps.staffEntry': -1 });
 
@@ -62,43 +100,85 @@ router.get('/staff-history', auth, async (req, res) => {
   }
 });
 
-// 4. SUBMIT INVENTORY (For Staff)
+// ==========================================
+// 3. SUBMISSION ROUTES (Hybrid Logic)
+// ==========================================
+
 router.post('/', auth, async (req, res) => {
   try {
-    const { 
-      binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode 
-    } = req.body;
+    // --- SCENARIO A: NEW SYSTEM (Bin ID / Book Qty) ---
+    // This handles data coming from your current Staff Dashboard
+    if (req.body.binId) {
+        const { 
+          binId, bookQuantity, actualQuantity, notes, location, uniqueCode, pincode 
+        } = req.body;
 
-    console.log(`Submitting: Bin ${binId} for Client ${uniqueCode}`);
+        console.log(`Submitting (Bin System): Bin ${binId} for Client ${uniqueCode}`);
 
-    const discrepancy = Math.abs(bookQuantity - actualQuantity);
+        const discrepancy = Math.abs(bookQuantity - actualQuantity);
 
-    // Determine Status
-    let status = 'auto-approved';
-    if (discrepancy > 0) status = 'pending-client';
+        let status = 'auto-approved';
+        if (discrepancy > 0) status = 'pending-client';
 
-    // Link Client ID if possible
-    const clientUser = await User.findOne({ uniqueCode });
+        // Link Client ID if possible
+        const clientUser = await User.findOne({ uniqueCode });
 
-    const newEntry = new Inventory({
-      binId,
-      bookQuantity,
-      actualQuantity,
-      notes,
-      location,
-      uniqueCode,
-      pincode,
-      discrepancy,
-      status,
-      staffId: req.user.id,
-      clientId: clientUser ? clientUser._id : undefined,
-      timestamps: {
-        staffEntry: new Date()
-      }
-    });
+        const newEntry = new Inventory({
+          binId,
+          bookQuantity,
+          actualQuantity,
+          notes,
+          location,
+          uniqueCode,
+          pincode,
+          discrepancy,
+          status,
+          staffId: req.user.id,
+          clientId: clientUser ? clientUser._id : undefined,
+          timestamps: { staffEntry: new Date() }
+        });
 
-    await newEntry.save();
-    res.json(newEntry);
+        await newEntry.save();
+        return res.json(newEntry);
+    } 
+    
+    // --- SCENARIO B: OLD SYSTEM (SKU / ODIN) ---
+    // This handles data if you have an older page sending "skuId" and "counts"
+    else if (req.body.skuId) {
+        const { 
+          skuId, skuName, location, counts, odin, assignedClientId 
+        } = req.body;
+
+        console.log('Submitting (SKU System):', skuId, location);
+
+        // Old Audit Logic
+        let auditResult = 'Match';
+        if (counts.totalIdentified > odin.maxQuantity) auditResult = 'Excess';
+        else if (counts.totalIdentified < odin.minQuantity) auditResult = 'Shortfall';
+
+        let status = 'auto-approved';
+        if (auditResult !== 'Match') status = 'pending-client';
+
+        const newEntry = new Inventory({
+          skuId,
+          skuName,
+          location,
+          counts,
+          odin,
+          auditResult, // Note: Your schema might need to support this field if you use it
+          status,
+          staffId: req.user.id,
+          assignedClientId: (status === 'pending-client') ? assignedClientId : undefined
+        });
+
+        await newEntry.save();
+        return res.json(newEntry);
+    }
+    
+    // Invalid Request
+    else {
+        return res.status(400).json({ message: 'Invalid submission data. Missing binId or skuId.' });
+    }
 
   } catch (err) {
     console.error('Submit Error:', err);
@@ -106,10 +186,10 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// 5. RESPOND TO ENTRY (For Clients)
+// 4. RESPOND ROUTE (Client Action)
 router.post('/:id/respond', auth, async (req, res) => {
   try {
-    const { action, comment } = req.body; 
+    const { action, comment } = req.body;
     const entryId = req.params.id;
 
     const entry = await Inventory.findById(entryId);
@@ -121,13 +201,9 @@ router.post('/:id/respond', auth, async (req, res) => {
         return res.status(403).json({ message: 'Not authorized for this entry' });
     }
 
-    if (action === 'approved') {
-        entry.status = 'client-approved';
-    } else if (action === 'rejected') {
-        entry.status = 'client-rejected';
-    } else {
-        return res.status(400).json({ message: 'Invalid action' });
-    }
+    if (action === 'approved') entry.status = 'client-approved';
+    else if (action === 'rejected') entry.status = 'client-rejected';
+    else return res.status(400).json({ message: 'Invalid action' });
 
     entry.clientResponse = { action, comment };
     entry.timestamps.clientResponse = new Date();
