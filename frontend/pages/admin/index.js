@@ -1,16 +1,45 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Papa from 'papaparse';
 import withAuth from '../../components/withAuth';
 
 function AdminDashboard() {
-  const [uploadType, setUploadType] = useState('inventory'); // inventory, staff, client
+  const [activeTab, setActiveTab] = useState('monitor'); // 'monitor', 'users', 'upload'
+  const [inventory, setInventory] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [uploadType, setUploadType] = useState('inventory');
+  
+  // -- DATA FETCHING --
+  useEffect(() => {
+    fetchData();
+  }, [activeTab]);
 
-  // 1. Logic to Download Templates
+  const fetchData = async () => {
+    const token = localStorage.getItem('token');
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+    
+    try {
+      if (activeTab === 'monitor') {
+        const res = await axios.get(`${baseUrl}/api/admin/inventory-all`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setInventory(res.data);
+      } else if (activeTab === 'users') {
+        const res = await axios.get(`${baseUrl}/api/admin/users`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setUsers(res.data);
+      }
+    } catch (err) {
+      console.error("Error fetching data", err);
+    }
+  };
+
+  // -- UPLOAD LOGIC (From previous step) --
   const handleDownloadTemplate = () => {
+    // ... (Keep existing download logic or copy from previous turn if needed)
     let headers = [];
     let filename = '';
-
     if (uploadType === 'inventory') {
       headers = ['SKU ID', 'Name of the SKU ID', 'Picking Location', 'Bulk Location', 'Quantity as on the date of Sampling'];
       filename = 'inventory_template.csv';
@@ -21,22 +50,15 @@ function AdminDashboard() {
       headers = ['Staff ID', 'Login PIN', 'Name', 'Location'];
       filename = 'client_template.csv';
     }
-
-    // Create CSV content (Comma separated)
     const csvContent = headers.join(',');
-    
-    // Create a Blob and trigger download
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url;
+    link.href = URL.createObjectURL(blob);
     link.setAttribute('download', filename);
-    document.body.appendChild(link);
+    document.body.click();
     link.click();
-    document.body.removeChild(link);
   };
 
-  // 2. Logic to Handle Uploads (Smart Parser)
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -45,36 +67,22 @@ function AdminDashboard() {
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
-        console.log("Parsed Data:", results.data); 
+        if (results.data.length === 0) return alert('File empty');
         
-        if (results.data.length === 0) {
-           alert('CSV Error: File appears empty.');
-           return;
-        }
-
         // Basic Validation
         const firstRow = results.data[0];
         if (uploadType === 'inventory' && !firstRow['SKU ID']) {
-          alert(`CSV Error: Could not find "SKU ID".\nDetected Headers: ${Object.keys(firstRow).join(', ')}`);
-          return;
+            return alert(`Error: Missing "SKU ID" column. Found: ${Object.keys(firstRow).join(', ')}`);
         }
-
-        const data = results.data;
-        processData(data);
-      },
-      error: (error) => {
-        console.error('CSV Parse Error:', error);
-        alert('Failed to parse CSV file.');
+        processUpload(results.data);
       }
     });
   };
 
- const processData = async (data) => {
+  const processUpload = async (data) => {
     try {
       const token = localStorage.getItem('token');
-      // Use the environment variable to hit the Backend (Port 5000)
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-      
       let endpoint = '';
       let payload = [];
 
@@ -93,10 +101,7 @@ function AdminDashboard() {
           sccId: row['Staff ID'],
           pin: row['Login PIN'],
           name: row['Name'],
-          assignedLocations: [
-            row['Location1'], row['Location2'], row['Location3'], 
-            row['Location4'], row['Location5'], row['Location6']
-          ].filter(Boolean)
+          assignedLocations: [row['Location1'], row['Location2'], row['Location3'], row['Location4'], row['Location5'], row['Location6']].filter(Boolean)
         }));
       } else if (uploadType === 'client') {
         endpoint = `${baseUrl}/api/admin/assign-client`;
@@ -108,72 +113,164 @@ function AdminDashboard() {
         }));
       }
 
-      console.log(`Sending request to: ${endpoint}`); // Debug log
-
-      await axios.post(endpoint, payload, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      await axios.post(endpoint, payload, { headers: { Authorization: `Bearer ${token}` } });
       alert('Upload Successful!');
-      window.location.reload(); 
+      fetchData(); // Refresh data
     } catch (err) {
-      console.error(err);
-      alert('Upload Failed: ' + (err.response?.data?.message || err.message));
+      alert('Upload Failed');
     }
   };
 
+  // -- RENDER HELPERS --
+  const getStatusColor = (status) => {
+    if (status === 'auto-approved' || status === 'client-approved') return 'bg-green-100 text-green-800';
+    if (status === 'client-rejected') return 'bg-red-100 text-red-800';
+    return 'bg-yellow-100 text-yellow-800';
+  };
+
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <h1 className="text-3xl font-bold mb-8 text-gray-800">Admin Upload Center</h1>
-      
-      {/* 3. Tab Selection */}
-      <div className="flex mb-8 border-b">
-        {['inventory', 'staff', 'client'].map((type) => (
-          <button
-            key={type}
-            onClick={() => setUploadType(type)}
-            className={`mr-6 pb-2 text-lg capitalize font-medium transition-colors ${
-              uploadType === type 
-                ? 'border-b-4 border-blue-600 text-blue-600' 
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {type} DB
-          </button>
-        ))}
-      </div>
+    <div className="min-h-screen bg-gray-50 p-8">
+      <div className="max-w-7xl mx-auto">
+        <h1 className="text-3xl font-bold mb-8 text-gray-800">Admin Control Panel</h1>
 
-      {/* 4. Upload Area */}
-      <div className="bg-white p-8 rounded-lg shadow-md border border-gray-200">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-semibold capitalize text-gray-700">
-            Upload {uploadType} Data
-          </h2>
-          
-          {/* New Download Template Button */}
-          <button 
-            onClick={handleDownloadTemplate}
-            className="flex items-center px-4 py-2 bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 transition-colors text-sm font-semibold"
-          >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-            Download {uploadType} Template
-          </button>
+        {/* TABS */}
+        <div className="flex mb-6 border-b bg-white rounded-t-lg shadow-sm">
+          {['monitor', 'users', 'upload'].map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-8 py-4 font-medium capitalize focus:outline-none ${
+                activeTab === tab 
+                  ? 'border-b-4 border-blue-600 text-blue-600 bg-blue-50' 
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {tab === 'monitor' ? 'Audit Monitor' : tab === 'users' ? 'User Management' : 'Data Upload'}
+            </button>
+          ))}
         </div>
 
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center bg-gray-50 hover:bg-gray-100 transition-colors">
-          <input 
-            type="file" 
-            accept=".csv" 
-            onChange={handleFileUpload} 
-            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
-          />
-          <p className="text-xs text-gray-500 mt-4">
-            Supports .csv files (Comma or Semicolon delimited)
-          </p>
-        </div>
+        {/* TAB 1: AUDIT MONITOR */}
+        {activeTab === 'monitor' && (
+          <div className="bg-white rounded-lg shadow overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU / Item</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Staff</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Result</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {inventory.map((item) => (
+                  <tr key={item._id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(item.timestamps.entry).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                      {item.skuId} <br/> <span className="text-gray-500 font-normal">{item.skuName}</span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{item.location}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{item.staffId?.name || 'Unknown'}</td>
+                    <td className="px-6 py-4 text-sm">
+                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                         ${item.auditResult === 'Match' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                         {item.auditResult}
+                       </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(item.status)}`}>
+                         {item.status}
+                       </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* TAB 2: USER MANAGEMENT */}
+        {activeTab === 'users' && (
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">Registered Users</h3>
+              <button 
+                onClick={() => setActiveTab('upload')} 
+                className="bg-indigo-600 text-white px-4 py-2 rounded text-sm"
+              >
+                Assign / Reassign via Upload
+              </button>
+            </div>
+            <table className="min-w-full divide-y divide-gray-200 border">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SCC ID</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">PIN</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Assignments</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {users.map((u) => (
+                  <tr key={u._id}>
+                    <td className="px-6 py-4 text-sm font-medium">{u.sccId || u.email}</td>
+                    <td className="px-6 py-4 text-sm">{u.name}</td>
+                    <td className="px-6 py-4 text-sm capitalize">{u.role}</td>
+                    <td className="px-6 py-4 text-sm font-mono">****</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      {u.role === 'staff' 
+                        ? u.assignedLocations?.join(', ') 
+                        : u.mappedLocation || '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* TAB 3: DATA UPLOAD (Previous Logic) */}
+        {activeTab === 'upload' && (
+          <div className="bg-white p-8 rounded-lg shadow-md border border-gray-200">
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex space-x-4">
+                {['inventory', 'staff', 'client'].map(type => (
+                   <label key={type} className="flex items-center space-x-2 cursor-pointer">
+                     <input 
+                       type="radio" 
+                       checked={uploadType === type} 
+                       onChange={() => setUploadType(type)}
+                       className="form-radio text-indigo-600"
+                     />
+                     <span className="capitalize">{type} DB</span>
+                   </label>
+                ))}
+              </div>
+              <button onClick={handleDownloadTemplate} className="text-indigo-600 text-sm font-bold hover:underline">
+                Download {uploadType} Template
+              </button>
+            </div>
+            
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center bg-gray-50 hover:bg-gray-100 transition-colors">
+              <input 
+                type="file" 
+                accept=".csv" 
+                onChange={handleFileUpload} 
+                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+              />
+              <p className="text-xs text-gray-500 mt-4">Upload {uploadType} CSV to assign/update records</p>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
 }
 
 export default withAuth(AdminDashboard, 'admin');
-
