@@ -69,14 +69,17 @@ function AdminDashboard() {
     });
   };
 
-  const processData = async (data) => {
+ const processData = async (data) => {
     try {
       const token = localStorage.getItem('token');
+      // Use the environment variable to hit the Backend (Port 5000)
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      
       let endpoint = '';
       let payload = [];
 
       if (uploadType === 'inventory') {
-        endpoint = '/api/admin/upload-inventory';
+        endpoint = `${baseUrl}/api/admin/upload-inventory`;
         payload = data.map(row => ({
           skuId: row['SKU ID'],
           name: row['Name of the SKU ID'],
@@ -85,7 +88,7 @@ function AdminDashboard() {
           systemQuantity: Number(row['Quantity as on the date of Sampling'] || 0)
         }));
       } else if (uploadType === 'staff') {
-        endpoint = '/api/admin/assign-staff';
+        endpoint = `${baseUrl}/api/admin/assign-staff`;
         payload = data.map(row => ({
           sccId: row['Staff ID'],
           pin: row['Login PIN'],
@@ -96,7 +99,7 @@ function AdminDashboard() {
           ].filter(Boolean)
         }));
       } else if (uploadType === 'client') {
-        endpoint = '/api/admin/assign-client';
+        endpoint = `${baseUrl}/api/admin/assign-client`;
         payload = data.map(row => ({
           sccId: row['Staff ID'],
           pin: row['Login PIN'],
@@ -105,11 +108,13 @@ function AdminDashboard() {
         }));
       }
 
+      console.log(`Sending request to: ${endpoint}`); // Debug log
+
       await axios.post(endpoint, payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
       alert('Upload Successful!');
-      window.location.reload(); // Refresh to clear file input
+      window.location.reload(); 
     } catch (err) {
       console.error(err);
       alert('Upload Failed: ' + (err.response?.data?.message || err.message));
@@ -171,3 +176,4 @@ function AdminDashboard() {
 }
 
 export default withAuth(AdminDashboard, 'admin');
+
