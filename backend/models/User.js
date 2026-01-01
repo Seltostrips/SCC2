@@ -3,8 +3,8 @@ const bcrypt = require('bcryptjs');
 
 const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  email: { type: String, unique: true, sparse: true }, // Admin uses this
-  password: { type: String }, // Admin uses this
+  email: { type: String, unique: true, sparse: true }, // For Admin
+  password: { type: String }, // For Admin
   role: { 
     type: String, 
     enum: ['admin', 'staff', 'client'], 
@@ -12,17 +12,19 @@ const UserSchema = new mongoose.Schema({
   },
   
   // --- CRITICAL: LOGIN CREDENTIALS FOR STAFF/CLIENT ---
-  uniqueCode: { type: String, unique: true, sparse: true }, // Matches "Staff ID" column
-  loginPin: { type: String }, // Matches "Login PIN" column
+  uniqueCode: { type: String, unique: true, sparse: true }, // Matches "Staff ID"
+  loginPin: { type: String }, // Matches "Login PIN"
   
   // --- LOCATION MAPPING ---
-  mappedLocation: { type: String }, // Keeps single string for backup
-  locations: { type: [String], default: [] }, // New: Array of locations (Location1, Location2...)
+  // We keep 'mappedLocation' (string) for legacy support
+  mappedLocation: { type: String }, 
+  // We add 'locations' (array) for the new Multi-Location feature
+  locations: { type: [String], default: [] }, 
   
   createdAt: { type: Date, default: Date.now }
 });
 
-// Admin Password Hash
+// Admin Password Hash (Only hashes 'password' field, leaves PIN as plain text for CSV compatibility)
 UserSchema.pre('save', async function(next) {
   if (!this.isModified('password') || !this.password) return next();
   const salt = await bcrypt.genSalt(10);
