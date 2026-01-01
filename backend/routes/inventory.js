@@ -1,21 +1,43 @@
 const express = require('express');
 const router = express.Router();
 const Inventory = require('../models/Inventory');
-const ReferenceInventory = require('../models/ReferenceInventory'); // <--- This was missing
+const ReferenceInventory = require('../models/ReferenceInventory'); 
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. LOOKUP SKU ROUTE (Fixes "SKU Not Found" error)
+// ==========================================
+// 1. ROBUST LOOKUP ROUTE (Fixes "SKU Not Found")
+// ==========================================
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
-    console.log(`Searching for SKU: ${req.params.skuId}`); // Debug log
-    const item = await ReferenceInventory.findOne({ skuId: req.params.skuId });
+    const rawSku = req.params.skuId;
+    const cleanSku = rawSku.trim(); 
     
+    console.log(`[DEBUG] Lookup Request: "${cleanSku}"`);
+
+    // Strategy 1: Exact String Match
+    let item = await ReferenceInventory.findOne({ skuId: cleanSku });
+    
+    // Strategy 2: Try as Number (Fixes CSV import mismatches)
+    if (!item && !isNaN(cleanSku)) {
+       console.log('[DEBUG] Exact match failed. Trying as Number...');
+       item = await ReferenceInventory.findOne({ skuId: Number(cleanSku) });
+    }
+
+    // Strategy 3: Case-Insensitive Regex (Fuzzy)
     if (!item) {
-      console.log('SKU not found in DB');
+       console.log('[DEBUG] Trying Fuzzy Regex...');
+       item = await ReferenceInventory.findOne({ 
+        skuId: { $regex: new RegExp(`^${cleanSku}$`, 'i') } 
+      });
+    }
+
+    if (!item) {
+      console.log('❌ SKU Not Found in DB');
       return res.status(404).json({ message: 'SKU not found' });
     }
     
+    console.log(`✅ Found SKU: ${item.skuId}`);
     res.json(item);
   } catch (err) {
     console.error('Lookup Error:', err);
@@ -23,11 +45,45 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (For the dropdown)
+// ==========================================
+// 2. DASHBOARD DATA ROUTES (Fixes 404 Error)
+// ==========================================
+
+// [NEW] Get Staff History (This was MISSING in your file)
+router.get('/staff-history', auth, async (req, res) => {
+  try {
+    // Show entries submitted by the logged-in staff member
+    const entries = await Inventory.find({ staffId: req.user.id })
+      .sort({ 'timestamps.staffEntry': -1 }); // Newest first
+
+    res.json(entries);
+  } catch (err) {
+    console.error('Error fetching staff history:', err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// [Restored] Get Pending Entries (For Client Dashboard)
+router.get('/pending', auth, async (req, res) => {
+  try {
+    const query = { status: 'pending-client' };
+    if (req.user.role === 'client') {
+      query.assignedClientId = req.user.id;
+    }
+    const entries = await Inventory.find(query)
+      .populate('staffId', 'name')
+      .sort({ 'timestamps.staffEntry': -1 });
+    res.json(entries);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// [Restored] Get Clients by Location
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
-    // Find clients mapped to this location
     const clients = await User.find({ role: 'client', mappedLocation: location });
     res.json(clients);
   } catch (err) {
@@ -36,14 +92,16 @@ router.get('/clients-by-location', auth, async (req, res) => {
   }
 });
 
-// 3. SUBMIT INVENTORY (New Logic with Counts & ODIN)
+// ==========================================
+// 3. SUBMIT INVENTORY
+// ==========================================
 router.post('/', auth, async (req, res) => {
   try {
     const { 
-      skuId, skuName, location, counts, odin, assignedClientId 
+      skuId, skuName, location, counts, odin, assignedClientId, notes
     } = req.body;
 
-    console.log('Submitting Inventory:', skuId, location);
+    console.log('Submitting Inventory:', skuId);
 
     // Calculate Audit Result
     let auditResult = 'Match';
@@ -63,12 +121,14 @@ router.post('/', auth, async (req, res) => {
       auditResult,
       status,
       staffId: req.user.id,
-      assignedClientId: (status === 'pending-client') ? assignedClientId : undefined
+      notes, // Added notes support
+      assignedClientId: (status === 'pending-client') ? assignedClientId : undefined,
+      timestamps: { staffEntry: new Date() }
     });
 
     await newEntry.save();
     
-    // Real-time Notification (Socket.io)
+    // Real-time Notification
     const io = req.app.get('io');
     if (io && status === 'pending-client' && assignedClientId) {
        io.to('client').emit('new-discrepancy', {
@@ -81,26 +141,6 @@ router.post('/', auth, async (req, res) => {
     res.json(newEntry);
   } catch (err) {
     console.error('Submit Error:', err);
-    res.status(500).send('Server Error');
-  }
-});
-
-// 4. GET PENDING ENTRIES (For Client Dashboard)
-router.get('/pending', auth, async (req, res) => {
-  try {
-    // If client, only show their specific assignments
-    const query = { status: 'pending-client' };
-    if (req.user.role === 'client') {
-      query.assignedClientId = req.user.id;
-    }
-    
-    const entries = await Inventory.find(query)
-      .populate('staffId', 'name')
-      .sort({ 'timestamps.entry': -1 });
-      
-    res.json(entries);
-  } catch (err) {
-    console.error(err);
     res.status(500).send('Server Error');
   }
 });
