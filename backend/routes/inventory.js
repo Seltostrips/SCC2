@@ -5,7 +5,7 @@ const ReferenceInventory = require('../models/ReferenceInventory');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. ROBUST LOOKUP
+// 1. ROBUST LOOKUP (Unchanged)
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
     const cleanSku = req.params.skuId.trim();
@@ -28,43 +28,32 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (FIXED: Fuzzy + Debug)
+// 2. GET CLIENTS BY LOCATION (FIXED: Relaxed Search)
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
-    // Decode in case it comes in encoded (though express usually handles this)
+    if (!location) return res.json([]);
+
+    // 1. Clean the input (remove %20, spaces)
     const cleanLocation = decodeURIComponent(location).trim();
     
-    if (!cleanLocation) return res.json([]);
-
     console.log(`[DEBUG] Searching for clients in: "${cleanLocation}"`);
 
-    // ROBUST QUERY STRATEGY:
-    // 1. Locations Array: Check if ANY element matches case-insensitive regex
-    // 2. MappedLocation String: Check if string contains the location
+    // 2. Create a "Contains" Regex (No ^ or $ anchors)
+    // This finds "Noida WH" inside "Noida WH " or "Noida WH\r"
+    const regex = new RegExp(cleanLocation, 'i');
+
     const clients = await User.find({ 
         role: 'client', 
         $or: [
-            // Matches ["Noida WH", "Delhi"] if search is "noida wh"
-            { locations: { $elemMatch: { $regex: new RegExp(`^${cleanLocation}$`, 'i') } } },
-            // Exact match fallback
-            { locations: cleanLocation },
-            // Legacy string match
-            { mappedLocation: { $regex: cleanLocation, $options: 'i' } }
+            // Check inside the locations array
+            { locations: { $elemMatch: { $regex: regex } } },
+            // Check the legacy string field
+            { mappedLocation: { $regex: regex } }
         ]
     }).select('name company uniqueCode locations mappedLocation');
     
-    console.log(`[DEBUG] Found ${clients.length} clients for "${cleanLocation}"`);
-    // Debug: print names found
-    if (clients.length > 0) {
-        console.log(`[DEBUG] Matches: ${clients.map(c => c.name).join(', ')}`);
-    } else {
-        // If 0 found, perform a "Wildcard" check to see if ANY clients exist at all
-        // This helps diagnose if the issue is the query or the data
-        const allClients = await User.countDocuments({ role: 'client' });
-        console.log(`[DEBUG] Total Clients in DB: ${allClients} (but 0 matched location)`);
-    }
-
+    console.log(`[DEBUG] Found ${clients.length} clients.`);
     res.json(clients);
   } catch (err) {
     console.error('Client Search Error:', err);
@@ -72,7 +61,7 @@ router.get('/clients-by-location', auth, async (req, res) => {
   }
 });
 
-// 3. STAFF HISTORY
+// 3. STAFF HISTORY (Unchanged)
 router.get('/staff-history', auth, async (req, res) => {
   try {
     const entries = await Inventory.find({ staffId: req.user.id })
@@ -84,7 +73,7 @@ router.get('/staff-history', auth, async (req, res) => {
   }
 });
 
-// 4. CLIENT PENDING
+// 4. CLIENT PENDING (Unchanged)
 router.get('/pending', auth, async (req, res) => {
   try {
     const query = { status: 'pending-client' };
@@ -99,7 +88,7 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// 5. SUBMIT INVENTORY
+// 5. SUBMIT INVENTORY (Unchanged)
 router.post('/', auth, async (req, res) => {
   try {
     const { skuId, skuName, location, counts, odin, assignedClientId, notes } = req.body;
@@ -141,7 +130,7 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// 6. RESPOND
+// 6. RESPOND (Unchanged)
 router.post('/:id/respond', auth, async (req, res) => {
   try {
     const { action, comment } = req.body;
