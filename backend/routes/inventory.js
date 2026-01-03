@@ -1,59 +1,60 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const ReferenceInventory = require('../models/ReferenceInventory'); 
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. ROBUST LOOKUP (Unchanged)
+// 1. ROBUST LOOKUP [CHANGE 2: Include Previous Submission Info]
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
     const cleanSku = req.params.skuId.trim();
     let item = await ReferenceInventory.findOne({ skuId: cleanSku });
     
-    if (!item && !isNaN(cleanSku)) {
-       item = await ReferenceInventory.findOne({ skuId: Number(cleanSku) });
-    }
-    if (!item) {
-       item = await ReferenceInventory.findOne({ 
-        skuId: { $regex: new RegExp(`^${cleanSku}$`, 'i') } 
-      });
-    }
+    // Fuzzy matching logic
+    if (!item && !isNaN(cleanSku)) item = await ReferenceInventory.findOne({ skuId: Number(cleanSku) });
+    if (!item) item = await ReferenceInventory.findOne({ skuId: { $regex: new RegExp(`^${cleanSku}$`, 'i') } });
 
     if (!item) return res.status(404).json({ message: 'SKU not found' });
-    res.json(item);
+
+    // [CHANGE 2] Check for ANY existing submission for this SKU
+    const existingEntry = await Inventory.findOne({ skuId: item.skuId })
+        .sort({ 'timestamps.staffEntry': -1 }) // Get latest
+        .populate('staffId', 'name');
+
+    const response = item.toObject();
+    if (existingEntry) {
+        response.previousSubmission = {
+            staffName: existingEntry.staffId?.name || 'Unknown',
+            time: existingEntry.timestamps.staffEntry,
+            status: existingEntry.status
+        };
+    }
+
+    res.json(response);
   } catch (err) {
     console.error('Lookup Error:', err);
     res.status(500).send('Server Error');
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (FIXED: Relaxed Search)
+// 2. GET CLIENTS BY LOCATION (Unchanged)
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
     if (!location) return res.json([]);
-
-    // 1. Clean the input (remove %20, spaces)
     const cleanLocation = decodeURIComponent(location).trim();
-    
-    console.log(`[DEBUG] Searching for clients in: "${cleanLocation}"`);
-
-    // 2. Create a "Contains" Regex (No ^ or $ anchors)
-    // This finds "Noida WH" inside "Noida WH " or "Noida WH\r"
     const regex = new RegExp(cleanLocation, 'i');
 
     const clients = await User.find({ 
         role: 'client', 
         $or: [
-            // Check inside the locations array
             { locations: { $elemMatch: { $regex: regex } } },
-            // Check the legacy string field
             { mappedLocation: { $regex: regex } }
         ]
     }).select('name company uniqueCode locations mappedLocation');
     
-    console.log(`[DEBUG] Found ${clients.length} clients.`);
     res.json(clients);
   } catch (err) {
     console.error('Client Search Error:', err);
@@ -61,11 +62,26 @@ router.get('/clients-by-location', auth, async (req, res) => {
   }
 });
 
-// 3. STAFF HISTORY (Unchanged)
+// 3. STAFF HISTORY [CHANGE 3: Show Unique Latest SKUs]
 router.get('/staff-history', auth, async (req, res) => {
   try {
-    const entries = await Inventory.find({ staffId: req.user.id })
-      .sort({ 'timestamps.staffEntry': -1 });
+    // Aggregation to dedup SKUs and keep latest
+    const entries = await Inventory.aggregate([
+        // Filter by current staff user
+        { $match: { staffId: new mongoose.Types.ObjectId(req.user.id) } },
+        // Sort by date descending (Newest first)
+        { $sort: { 'timestamps.staffEntry': -1 } },
+        // Group by SKU, taking the first (latest) document found
+        { $group: {
+            _id: "$skuId",
+            doc: { $first: "$$ROOT" }
+        }},
+        // Replace root to return clean documents
+        { $replaceRoot: { newRoot: "$doc" } },
+        // Sort the final list by date again
+        { $sort: { 'timestamps.staffEntry': -1 } }
+    ]);
+
     res.json(entries);
   } catch (err) {
     console.error(err);
