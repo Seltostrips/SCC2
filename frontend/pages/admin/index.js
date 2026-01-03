@@ -36,39 +36,40 @@ function AdminDashboard() {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        // --- [CRITICAL CHANGE] PROCESS ATTEMPTS LOGIC ---
-        // 1. Sort Ascending (Oldest -> Newest)
+        // --- 1. CALCULATE ATTEMPTS & AUDIT TRAIL ---
+        // Sort Ascending (Oldest First) to determine order
         const sortedData = [...res.data].sort((a, b) => 
-            new Date(a.dateSubmitted || 0) - new Date(b.dateSubmitted || 0)
+            new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime()
         );
 
-        // 2. Group by SKU
+        // Group by SKU
         const groups = {};
         sortedData.forEach(item => {
-            const id = item.skuId;
+            const id = item.skuId || 'unknown';
             if (!groups[id]) groups[id] = [];
             groups[id].push(item);
         });
 
-        // 3. Assign Labels (1, 2, ... Final)
+        // Assign "Attempt" Labels (1, 2... Final)
         const processed = [];
         Object.values(groups).forEach(group => {
             group.forEach((item, index) => {
                 const isLast = (index === group.length - 1);
+                // This tag is used for the CSV and for filtering the UI
                 item.attemptLabel = isLast ? 'Final' : (index + 1).toString();
                 processed.push(item);
             });
         });
 
-        // 4. Sort Descending (Newest First) for Display
+        // Sort Descending (Newest First) for the Table View
         processed.sort((a, b) => 
-            new Date(b.dateSubmitted || 0) - new Date(a.dateSubmitted || 0)
+            new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime()
         );
 
         setInventory(processed);
 
       } else if (activeTab === 'users') {
-        const res = await axios.get(getApiUrl('/api/admin/users'), { // Fixed route
+        const res = await axios.get(getApiUrl('/api/admin/users'), { 
           headers: { Authorization: `Bearer ${token}` }
         });
         setUsers(res.data);
@@ -78,15 +79,15 @@ function AdminDashboard() {
     }
   };
 
-  // -- DOWNLOAD REPORT --
+  // -- DOWNLOAD REPORT (Corrected Columns) --
   const handleDownloadReport = () => {
     if (inventory.length === 0) return alert('No data to download');
 
-    // [CRITICAL CHANGE] Add 'Attempt' Column
+    // EXPLICIT MAPPING to ensure "Attempt" is present
     const csvData = inventory.map(item => ({
         'SKU ID': item.skuId,
         'Name': item.skuName,
-        'Attempt': item.attemptLabel, // Shows '1', '2', or 'Final'
+        'Attempt': item.attemptLabel || 'Final', // <--- THE NEW COLUMN
         'Picking Location': item.pickingLocation,
         'Bulk Location': item.bulkLocation,
         'Quantity as per Odin (Min)': item.odinMin,
@@ -124,13 +125,11 @@ function AdminDashboard() {
       try {
           const token = localStorage.getItem('token');
           const locArray = editForm.locationsStr.split(',').map(s => s.trim()).filter(s => s);
-          
           await axios.put(getApiUrl(`/api/auth/users/${editingUser._id}`), {
               name: editForm.name,
               loginPin: editForm.loginPin,
               locations: locArray
           }, { headers: { Authorization: `Bearer ${token}` } });
-          
           setEditingUser(null);
           fetchData(); 
           alert('User updated successfully');
@@ -174,11 +173,11 @@ function AdminDashboard() {
         try {
             if (uploadType === 'inventory') {
                  const payload = rows.map(row => ({
-                    skuId: row['SKU ID'],
-                    name: row['Name of the SKU ID'],
-                    pickingLocation: row['Picking Location'],
-                    bulkLocation: row['Bulk Location'],
-                    systemQuantity: parseFloat(row['Quantity as on the date of Sampling']) || 0
+                    skuId: row['skuId'] || row['SKU ID'],
+                    name: row['name'] || row['Name of the SKU ID'],
+                    pickingLocation: row['pickingLocation'] || row['Picking Location'],
+                    bulkLocation: row['bulkLocation'] || row['Bulk Location'],
+                    systemQuantity: parseFloat(row['systemQuantity'] || row['Quantity as on the date of Sampling'] || 0)
                  })).filter(i => i.skuId);
 
                  await axios.post(getApiUrl('/api/admin/upload-inventory'), payload, {
@@ -262,7 +261,7 @@ function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {/* [CRITICAL CHANGE] Filter to only show FINAL attempts in UI */}
+                    {/* Only show 'Final' entries in the table view */}
                     {inventory.filter(i => i.attemptLabel === 'Final').map((item) => (
                       <tr key={item._id}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.skuId}</td>
@@ -342,6 +341,7 @@ function AdminDashboard() {
         </main>
       </div>
 
+      {/* EDIT MODAL */}
       {editingUser && (
         <div className="fixed inset-0 z-10 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
