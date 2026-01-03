@@ -36,35 +36,33 @@ function AdminDashboard() {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        // --- 1. CALCULATE ATTEMPTS & AUDIT TRAIL ---
-        // Sort Ascending (Oldest First) to determine order
-        const sortedData = [...res.data].sort((a, b) => 
-            new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime()
-        );
+        // --- UI FILTER LOGIC ---
+        // We calculate attempts here so the UI can filter by "Final"
+        const rawData = [...res.data];
+        
+        // 1. Sort Ascending (Oldest -> Newest) to determine attempt order
+        rawData.sort((a, b) => new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime());
 
-        // Group by SKU
+        // 2. Group by SKU
         const groups = {};
-        sortedData.forEach(item => {
+        rawData.forEach(item => {
             const id = item.skuId || 'unknown';
             if (!groups[id]) groups[id] = [];
             groups[id].push(item);
         });
 
-        // Assign "Attempt" Labels (1, 2... Final)
+        // 3. Assign Labels
         const processed = [];
         Object.values(groups).forEach(group => {
             group.forEach((item, index) => {
                 const isLast = (index === group.length - 1);
-                // This tag is used for the CSV and for filtering the UI
                 item.attemptLabel = isLast ? 'Final' : (index + 1).toString();
                 processed.push(item);
             });
         });
 
-        // Sort Descending (Newest First) for the Table View
-        processed.sort((a, b) => 
-            new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime()
-        );
+        // 4. Sort Descending (Newest First) for the Table View
+        processed.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
 
         setInventory(processed);
 
@@ -79,15 +77,25 @@ function AdminDashboard() {
     }
   };
 
-  // -- DOWNLOAD REPORT (Corrected Columns) --
+  // -- DOWNLOAD REPORT (Fixed Sorting & Attempt Column) --
   const handleDownloadReport = () => {
     if (inventory.length === 0) return alert('No data to download');
 
-    // EXPLICIT MAPPING to ensure "Attempt" is present
-    const csvData = inventory.map(item => ({
+    // 1. Sort for CSV: Date Descending, then SKU ID
+    const sortedForCsv = [...inventory].sort((a, b) => {
+        const dateA = new Date(a.dateSubmitted).getTime();
+        const dateB = new Date(b.dateSubmitted).getTime();
+        // Primary Sort: Date (Newest first)
+        if (dateB !== dateA) return dateB - dateA;
+        // Secondary Sort: SKU ID
+        return (a.skuId || '').localeCompare(b.skuId || '');
+    });
+
+    // 2. Map Data (Guarantees "Attempt" column)
+    const csvData = sortedForCsv.map(item => ({
         'SKU ID': item.skuId,
         'Name': item.skuName,
-        'Attempt': item.attemptLabel || 'Final', // <--- THE NEW COLUMN
+        'Attempt': item.attemptLabel || 'Final', // <--- Forced Fallback
         'Picking Location': item.pickingLocation,
         'Bulk Location': item.bulkLocation,
         'Quantity as per Odin (Min)': item.odinMin,
@@ -101,6 +109,7 @@ function AdminDashboard() {
         'Date Submitted': new Date(item.dateSubmitted).toLocaleString()
     }));
 
+    // 3. Generate File
     const csv = Papa.unparse(csvData);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
