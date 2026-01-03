@@ -17,11 +17,13 @@ function AdminDashboard() {
   const [editingUser, setEditingUser] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', loginPin: '', locationsStr: '' });
 
+  // -- API HELPER --
   const getApiUrl = (endpoint) => {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
     return `${baseUrl.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
   };
 
+  // -- DATA FETCHING --
   useEffect(() => {
     fetchData();
   }, [activeTab]);
@@ -34,35 +36,39 @@ function AdminDashboard() {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        // [CHANGE 1] PROCESS DATA FOR ATTEMPTS & AUDIT TRAIL
-        // 1. Sort by Date Ascending first to order history correctly
-        const sortedData = res.data.sort((a, b) => new Date(a.dateSubmitted) - new Date(b.dateSubmitted));
-        
-        // 2. Group by SKU to determine attempt numbers
+        // --- [CRITICAL CHANGE] PROCESS ATTEMPTS LOGIC ---
+        // 1. Sort Ascending (Oldest -> Newest)
+        const sortedData = [...res.data].sort((a, b) => 
+            new Date(a.dateSubmitted || 0) - new Date(b.dateSubmitted || 0)
+        );
+
+        // 2. Group by SKU
         const groups = {};
         sortedData.forEach(item => {
-            if (!groups[item.skuId]) groups[item.skuId] = [];
-            groups[item.skuId].push(item);
+            const id = item.skuId;
+            if (!groups[id]) groups[id] = [];
+            groups[id].push(item);
         });
 
-        // 3. Assign "Attempt" label (1, 2... Final)
-        const processedData = [];
+        // 3. Assign Labels (1, 2, ... Final)
+        const processed = [];
         Object.values(groups).forEach(group => {
             group.forEach((item, index) => {
-                const isLast = index === group.length - 1;
-                // Add new property 'attemptLabel'
+                const isLast = (index === group.length - 1);
                 item.attemptLabel = isLast ? 'Final' : (index + 1).toString();
-                processedData.push(item);
+                processed.push(item);
             });
         });
 
-        // 4. Sort back to Descending (Newest first) for display
-        processedData.sort((a, b) => new Date(b.dateSubmitted) - new Date(a.dateSubmitted));
+        // 4. Sort Descending (Newest First) for Display
+        processed.sort((a, b) => 
+            new Date(b.dateSubmitted || 0) - new Date(a.dateSubmitted || 0)
+        );
 
-        setInventory(processedData);
+        setInventory(processed);
 
       } else if (activeTab === 'users') {
-        const res = await axios.get(getApiUrl('/api/auth/users'), {
+        const res = await axios.get(getApiUrl('/api/admin/users'), { // Fixed route
           headers: { Authorization: `Bearer ${token}` }
         });
         setUsers(res.data);
@@ -72,14 +78,15 @@ function AdminDashboard() {
     }
   };
 
-  // -- DOWNLOAD REPORT (Includes All Attempts) --
+  // -- DOWNLOAD REPORT --
   const handleDownloadReport = () => {
     if (inventory.length === 0) return alert('No data to download');
 
+    // [CRITICAL CHANGE] Add 'Attempt' Column
     const csvData = inventory.map(item => ({
         'SKU ID': item.skuId,
         'Name': item.skuName,
-        'Attempt': item.attemptLabel, // [CHANGE 1] New Column
+        'Attempt': item.attemptLabel, // Shows '1', '2', or 'Final'
         'Picking Location': item.pickingLocation,
         'Bulk Location': item.bulkLocation,
         'Quantity as per Odin (Min)': item.odinMin,
@@ -103,9 +110,7 @@ function AdminDashboard() {
     document.body.removeChild(link);
   };
 
-  // ... (Rest of the file remains unchanged: handleEditClick, handleEditSave, etc.)
-  // [Preserving all existing logic below]
-
+  // -- EDIT USER LOGIC --
   const handleEditClick = (user) => {
     setEditingUser(user);
     setEditForm({
@@ -119,17 +124,20 @@ function AdminDashboard() {
       try {
           const token = localStorage.getItem('token');
           const locArray = editForm.locationsStr.split(',').map(s => s.trim()).filter(s => s);
+          
           await axios.put(getApiUrl(`/api/auth/users/${editingUser._id}`), {
               name: editForm.name,
               loginPin: editForm.loginPin,
               locations: locArray
           }, { headers: { Authorization: `Bearer ${token}` } });
+          
           setEditingUser(null);
           fetchData(); 
           alert('User updated successfully');
       } catch (err) { alert('Failed to update user'); }
   };
 
+  // -- TEMPLATE DOWNLOAD --
   const handleDownloadTemplate = () => {
     let headers = [];
     let filename = '';
@@ -149,6 +157,7 @@ function AdminDashboard() {
     document.body.removeChild(link);
   };
 
+  // -- FILE UPLOAD --
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -161,16 +170,20 @@ function AdminDashboard() {
       complete: async (results) => {
         const token = localStorage.getItem('token');
         const rows = results.data;
+        
         try {
             if (uploadType === 'inventory') {
                  const payload = rows.map(row => ({
-                    skuId: row['skuId'] || row['SKU ID'],
-                    name: row['name'] || row['Name of the SKU ID'],
-                    pickingLocation: row['pickingLocation'] || row['Picking Location'],
-                    bulkLocation: row['bulkLocation'] || row['Bulk Location'],
-                    systemQuantity: parseFloat(row['systemQuantity'] || row['Quantity as on the date of Sampling'] || 0)
+                    skuId: row['SKU ID'],
+                    name: row['Name of the SKU ID'],
+                    pickingLocation: row['Picking Location'],
+                    bulkLocation: row['Bulk Location'],
+                    systemQuantity: parseFloat(row['Quantity as on the date of Sampling']) || 0
                  })).filter(i => i.skuId);
-                 await axios.post(getApiUrl('/api/admin/upload-inventory'), payload, { headers: { Authorization: `Bearer ${token}` } });
+
+                 await axios.post(getApiUrl('/api/admin/upload-inventory'), payload, {
+                    headers: { Authorization: `Bearer ${token}` }
+                 });
                  setUploadStatus(`Success! Uploaded ${payload.length} items.`);
             } else {
                const payload = rows.map(row => {
@@ -186,6 +199,7 @@ function AdminDashboard() {
                        mappedLocation: locArray.join(', ')
                    };
                }).filter(u => u.uniqueCode);
+
                const endpoint = uploadType === 'staff' ? '/api/admin/assign-staff' : '/api/admin/assign-client';
                await axios.post(getApiUrl(endpoint), payload, { headers: { Authorization: `Bearer ${token}` } });
                setUploadStatus(`Success! Updated ${payload.length} ${uploadType}s.`);
@@ -211,7 +225,9 @@ function AdminDashboard() {
               <div className="flex-shrink-0 flex items-center font-bold text-xl text-indigo-600">Admin Panel</div>
               <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
                 {['monitor', 'users', 'upload'].map(tab => (
-                    <button key={tab} onClick={() => setActiveTab(tab)} className={`${activeTab === tab ? 'border-indigo-500 text-gray-900' : 'border-transparent text-gray-500'} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium capitalize`}>{tab}</button>
+                    <button key={tab} onClick={() => setActiveTab(tab)} className={`${activeTab === tab ? 'border-indigo-500 text-gray-900' : 'border-transparent text-gray-500'} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium capitalize`}>
+                      {tab}
+                    </button>
                 ))}
               </div>
             </div>
@@ -221,6 +237,8 @@ function AdminDashboard() {
 
       <div className="py-10">
         <main className="max-w-7xl mx-auto sm:px-6 lg:px-8">
+          
+          {/* TAB 1: MONITOR */}
           {activeTab === 'monitor' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
               <div className="px-4 py-5 sm:px-6 flex justify-between items-center">
@@ -239,13 +257,12 @@ function AdminDashboard() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Staff</th>
-                      {/* [CHANGE 1] Added Attempt Column */}
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attempt</th> 
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attempt</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Discrepancy</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {/* [CHANGE 1] Filter to show ONLY FINAL attempts in the UI */}
+                    {/* [CRITICAL CHANGE] Filter to only show FINAL attempts in UI */}
                     {inventory.filter(i => i.attemptLabel === 'Final').map((item) => (
                       <tr key={item._id}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.skuId}</td>
@@ -255,7 +272,6 @@ function AdminDashboard() {
                           </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.staffName}</td>
-                        {/* Show "Final" badge */}
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold bg-gray-50">
                             {item.attemptLabel}
                         </td>
@@ -270,7 +286,7 @@ function AdminDashboard() {
             </div>
           )}
 
-          {/* ... (Users Tab and Upload Tab logic kept exactly as before) ... */}
+          {/* TAB 2: USERS */}
           {activeTab === 'users' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
               <div className="px-4 py-5 sm:px-6"><h3 className="text-lg leading-6 font-medium text-gray-900">System Users</h3></div>
@@ -301,6 +317,7 @@ function AdminDashboard() {
             </div>
           )}
 
+          {/* TAB 3: UPLOAD */}
           {activeTab === 'upload' && (
             <div className="bg-white shadow sm:rounded-lg">
               <div className="px-4 py-5 sm:p-6">
@@ -331,11 +348,20 @@ function AdminDashboard() {
             <div className="fixed inset-0 bg-gray-500 bg-opacity-75" onClick={() => setEditingUser(null)}></div>
             <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <h3 className="text-lg leading-6 font-medium text-gray-900">Edit User</h3>
+                <h3 className="text-lg leading-6 font-medium text-gray-900">Edit User: {editingUser.name}</h3>
                 <div className="mt-4 space-y-4">
-                    <input type="text" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full border p-2 rounded" placeholder="Name"/>
-                    <input type="text" value={editForm.loginPin} onChange={e => setEditForm({...editForm, loginPin: e.target.value})} className="w-full border p-2 rounded" placeholder="New PIN"/>
-                    <input type="text" value={editForm.locationsStr} onChange={e => setEditForm({...editForm, locationsStr: e.target.value})} className="w-full border p-2 rounded" placeholder="Locations (comma separated)"/>
+                    <div>
+                       <label className="block text-sm font-bold text-gray-700">Name</label>
+                       <input type="text" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full border p-2 rounded"/>
+                    </div>
+                    <div>
+                       <label className="block text-sm font-bold text-gray-700">Login PIN</label>
+                       <input type="text" value={editForm.loginPin} onChange={e => setEditForm({...editForm, loginPin: e.target.value})} className="w-full border p-2 rounded" placeholder="New PIN (leave blank to keep)"/>
+                    </div>
+                    <div>
+                       <label className="block text-sm font-bold text-gray-700">Locations (comma separated)</label>
+                       <input type="text" value={editForm.locationsStr} onChange={e => setEditForm({...editForm, locationsStr: e.target.value})} className="w-full border p-2 rounded"/>
+                    </div>
                 </div>
               </div>
               <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
