@@ -16,7 +16,7 @@ router.get('/users', auth, async (req, res) => {
   }
 });
 
-// 2. GET ALL INVENTORY (New Smart Aggregation for Report)
+// 2. GET ALL INVENTORY (Report Aggregation)
 router.get('/inventory-all', auth, async (req, res) => {
   try {
     const entries = await Inventory.aggregate([
@@ -47,7 +47,6 @@ router.get('/inventory-all', auth, async (req, res) => {
       { $sort: { 'timestamps.staffEntry': -1 } }
     ]);
 
-    // Format for Frontend
     const formatted = entries.map(entry => {
       const staff = entry.staffDetails[0] || {};
       const client = entry.clientDetails[0] || {};
@@ -79,10 +78,10 @@ router.get('/inventory-all', auth, async (req, res) => {
   }
 });
 
-// 3. BULK UPLOAD INVENTORY (Restored BulkWrite)
+// 3. BULK UPLOAD INVENTORY
 router.post('/upload-inventory', auth, async (req, res) => {
   try {
-    const items = req.body; // Expects Array
+    const items = req.body;
     if (!Array.isArray(items)) return res.status(400).send('Expected array of items');
 
     const operations = items.map(item => ({
@@ -101,7 +100,7 @@ router.post('/upload-inventory', auth, async (req, res) => {
   }
 });
 
-// 4. BULK ASSIGN STAFF (Restored & Adapted to New Schema)
+// 4. BULK ASSIGN STAFF
 router.post('/assign-staff', auth, async (req, res) => {
   try {
     const users = req.body;
@@ -109,14 +108,14 @@ router.post('/assign-staff', auth, async (req, res) => {
 
     const operations = users.map(u => ({
       updateOne: {
-        filter: { uniqueCode: u.uniqueCode }, // Match by Staff ID
+        filter: { uniqueCode: u.uniqueCode },
         update: { 
           $set: { 
             name: u.name, 
             loginPin: u.loginPin, 
             role: 'staff',
-            locations: u.locations, // Array of strings
-            mappedLocation: u.mappedLocation // String backup
+            locations: u.locations,
+            mappedLocation: u.mappedLocation
           } 
         },
         upsert: true
@@ -131,7 +130,7 @@ router.post('/assign-staff', auth, async (req, res) => {
   }
 });
 
-// 5. BULK ASSIGN CLIENT (Restored & Adapted to New Schema)
+// 5. BULK ASSIGN CLIENT
 router.post('/assign-client', auth, async (req, res) => {
   try {
     const users = req.body;
@@ -139,7 +138,7 @@ router.post('/assign-client', auth, async (req, res) => {
 
     const operations = users.map(u => ({
       updateOne: {
-        filter: { uniqueCode: u.uniqueCode }, // Match by Client ID
+        filter: { uniqueCode: u.uniqueCode },
         update: { 
           $set: { 
             name: u.name, 
@@ -157,6 +156,41 @@ router.post('/assign-client', auth, async (req, res) => {
     res.json({ message: 'Clients Updated', result });
   } catch (err) {
     console.error('Client Upload Error:', err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// --- NEW DELETE ROUTES ---
+
+// 6. DELETE ALL STAFF
+router.delete('/delete-all-staff', auth, async (req, res) => {
+  try {
+    const result = await User.deleteMany({ role: 'staff' });
+    res.json({ message: `Deleted ${result.deletedCount} staff members.` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// 7. DELETE ALL CLIENTS
+router.delete('/delete-all-clients', auth, async (req, res) => {
+  try {
+    const result = await User.deleteMany({ role: 'client' });
+    res.json({ message: `Deleted ${result.deletedCount} clients.` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
+// 8. DELETE ALL REFERENCE INVENTORY
+router.delete('/delete-all-reference-inventory', auth, async (req, res) => {
+  try {
+    const result = await ReferenceInventory.deleteMany({});
+    res.json({ message: `Deleted ${result.deletedCount} inventory items.` });
+  } catch (err) {
+    console.error(err);
     res.status(500).send('Server Error');
   }
 });
