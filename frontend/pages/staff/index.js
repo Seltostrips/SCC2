@@ -11,7 +11,7 @@ function StaffDashboard({ user }) {
   const [lookupResult, setLookupResult] = useState(null);
   const [activeLocation, setActiveLocation] = useState(''); 
   const [notes, setNotes] = useState('');
-  const [duplicateWarning, setDuplicateWarning] = useState(null); // [CHANGE 2]
+  const [duplicateWarning, setDuplicateWarning] = useState(null);
   
   // Detailed Counts
   const [counts, setCounts] = useState({
@@ -79,7 +79,7 @@ function StaffDashboard({ user }) {
     setLoadingLookup(true);
     setLookupResult(null);
     setMessage('');
-    setDuplicateWarning(null); // Reset warning
+    setDuplicateWarning(null);
     
     setCounts({ picking: 0, bulk: 0, nearExpiry: 0, jit: 0, damaged: 0 });
     setOdinInputs({ minQuantity: 0, blocked: 0 });
@@ -87,12 +87,16 @@ function StaffDashboard({ user }) {
 
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get(getApiUrl(`/api/inventory/lookup/${skuSearch}`), {
+      
+      // [CRITICAL CHANGE]: Concatenate Location + Hyphen + SKU
+      // Logic: "Noida WH" + "-" + "123456" -> "Noida WH-123456"
+      const searchQuery = `${activeLocation}-${skuSearch}`.trim();
+
+      const res = await axios.get(getApiUrl(`/api/inventory/lookup/${encodeURIComponent(searchQuery)}`), {
         headers: { Authorization: `Bearer ${token}` }
       });
       setLookupResult(res.data);
       
-      // [CHANGE 2] Handle Duplicate Warning
       if (res.data.previousSubmission) {
           const prev = res.data.previousSubmission;
           setDuplicateWarning({
@@ -103,7 +107,9 @@ function StaffDashboard({ user }) {
       }
 
     } catch (err) {
-      setMessage('SKU not found in Reference Database.');
+      console.error(err);
+      // Updated error message to show the hyphenated ID
+      setMessage(`SKU "${activeLocation}-${skuSearch}" not found in Reference Database.`);
     } finally {
       setLoadingLookup(false);
     }
@@ -118,7 +124,7 @@ function StaffDashboard({ user }) {
     try {
       const token = localStorage.getItem('token');
       const payload = {
-        skuId: lookupResult.skuId,
+        skuId: lookupResult.skuId, // This is the full ID (e.g. Noida WH-123456)
         skuName: lookupResult.name,
         location: activeLocation, 
         counts,
@@ -163,7 +169,6 @@ function StaffDashboard({ user }) {
              </div>
           </div>
           
-          {/* [CHANGE 2] Duplicate Warning Box */}
           {duplicateWarning && (
               <div className="mb-6 p-4 bg-red-100 border-l-4 border-red-500 text-red-700">
                   <p className="text-lg font-bold">⚠️ Warning: SKU already submitted!</p>
@@ -289,7 +294,7 @@ function StaffDashboard({ user }) {
           )}
         </div>
 
-        {/* HISTORY SECTIONS [CHANGE 3: Shows Latest Status Only] */}
+        {/* HISTORY SECTIONS */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white p-4 rounded shadow border-t-4 border-yellow-400">
                 <h3 className="font-bold text-yellow-700 mb-2">Pending Approval</h3>
