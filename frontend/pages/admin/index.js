@@ -37,10 +37,9 @@ function AdminDashboard() {
         });
         
         // --- UI FILTER LOGIC ---
-        // We calculate attempts here so the UI can filter by "Final"
         const rawData = [...res.data];
         
-        // 1. Sort Ascending (Oldest -> Newest) to determine attempt order
+        // 1. Sort Ascending (Oldest -> Newest)
         rawData.sort((a, b) => new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime());
 
         // 2. Group by SKU
@@ -61,7 +60,7 @@ function AdminDashboard() {
             });
         });
 
-        // 4. Sort Descending (Newest First) for the Table View
+        // 4. Sort Descending
         processed.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
 
         setInventory(processed);
@@ -77,25 +76,21 @@ function AdminDashboard() {
     }
   };
 
-  // -- DOWNLOAD REPORT (Fixed Sorting & Attempt Column) --
+  // -- DOWNLOAD REPORT --
   const handleDownloadReport = () => {
     if (inventory.length === 0) return alert('No data to download');
 
-    // 1. Sort for CSV: Date Descending, then SKU ID
     const sortedForCsv = [...inventory].sort((a, b) => {
         const dateA = new Date(a.dateSubmitted).getTime();
         const dateB = new Date(b.dateSubmitted).getTime();
-        // Primary Sort: Date (Newest first)
         if (dateB !== dateA) return dateB - dateA;
-        // Secondary Sort: SKU ID
         return (a.skuId || '').localeCompare(b.skuId || '');
     });
 
-    // 2. Map Data (Guarantees "Attempt" column)
     const csvData = sortedForCsv.map(item => ({
         'SKU ID': item.skuId,
         'Name': item.skuName,
-        'Attempt': item.attemptLabel || 'Final', // <--- Forced Fallback
+        'Attempt': item.attemptLabel || 'Final',
         'Picking Location': item.pickingLocation,
         'Bulk Location': item.bulkLocation,
         'Quantity as per Odin (Min)': item.odinMin,
@@ -109,7 +104,6 @@ function AdminDashboard() {
         'Date Submitted': new Date(item.dateSubmitted).toLocaleString()
     }));
 
-    // 3. Generate File
     const csv = Papa.unparse(csvData);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -222,6 +216,37 @@ function AdminDashboard() {
         }
       }
     });
+  };
+
+  // --- DELETE HANDLERS ---
+  const handleDeleteAll = async (type) => {
+      let endpoint = '';
+      let warning = '';
+      
+      if (type === 'staff') {
+          endpoint = '/api/admin/delete-all-staff';
+          warning = '⚠️ ARE YOU SURE? This will delete ALL Staff accounts permanently!';
+      } else if (type === 'client') {
+          endpoint = '/api/admin/delete-all-clients';
+          warning = '⚠️ ARE YOU SURE? This will delete ALL Client accounts permanently!';
+      } else if (type === 'inventory') {
+          endpoint = '/api/admin/delete-all-reference-inventory';
+          warning = '⚠️ ARE YOU SURE? This will delete ALL Uploaded Inventory Reference Data!';
+      }
+
+      if (!confirm(warning)) return;
+
+      try {
+          const token = localStorage.getItem('token');
+          const res = await axios.delete(getApiUrl(endpoint), {
+              headers: { Authorization: `Bearer ${token}` }
+          });
+          alert(res.data.message);
+          if (activeTab === 'users') fetchData();
+      } catch (err) {
+          console.error(err);
+          alert('Delete failed.');
+      }
   };
 
   return (
@@ -344,6 +369,23 @@ function AdminDashboard() {
                   {loading && <p className="text-blue-600 font-bold animate-pulse">{uploadStatus}</p>}
                   {!loading && uploadStatus && <div className={`p-4 rounded-md ${uploadStatus.includes('Failed') ? 'bg-yellow-50 text-yellow-700' : 'bg-green-50 text-green-700'}`}>{uploadStatus}</div>}
                 </div>
+
+                {/* --- DANGER ZONE --- */}
+                <div className="mt-12 pt-8 border-t border-red-200">
+                    <h4 className="text-red-700 font-bold text-lg mb-4">⚠️ Danger Zone: Delete Data</h4>
+                    <div className="flex flex-wrap gap-4">
+                        <button onClick={() => handleDeleteAll('staff')} className="bg-red-100 hover:bg-red-200 text-red-700 font-bold py-2 px-4 rounded border border-red-300">
+                            Delete All Staff
+                        </button>
+                        <button onClick={() => handleDeleteAll('client')} className="bg-red-100 hover:bg-red-200 text-red-700 font-bold py-2 px-4 rounded border border-red-300">
+                            Delete All Clients
+                        </button>
+                        <button onClick={() => handleDeleteAll('inventory')} className="bg-red-100 hover:bg-red-200 text-red-700 font-bold py-2 px-4 rounded border border-red-300">
+                            Delete All Inventory (Ref)
+                        </button>
+                    </div>
+                </div>
+
               </div>
             </div>
           )}
