@@ -64,14 +64,33 @@ function StaffDashboard({ user }) {
     } catch (err) { console.error('Error fetching clients:', err); }
   };
 
+  // --- NEW CALCULATION LOGIC ---
   const totalIdentified = 
     (parseInt(counts.picking)||0) + (parseInt(counts.bulk)||0) + (parseInt(counts.nearExpiry)||0) + 
     (parseInt(counts.jit)||0) + (parseInt(counts.damaged)||0);
-  const totalSystem = (parseInt(odinInputs.minQuantity)||0) + (parseInt(odinInputs.blocked)||0);
-  const discrepancy = totalIdentified - totalSystem;
+  
+  const minQty = parseInt(odinInputs.minQuantity)||0;
+  const blockedQty = parseInt(odinInputs.blocked)||0;
+  const maxQty = minQty + blockedQty;
+
   let auditStatus = 'Match';
-  if (discrepancy > 0) auditStatus = 'Excess';
-  if (discrepancy < 0) auditStatus = 'Shortfall';
+  let discrepancyDisplay = 0;
+
+  // [Calculation 2] Shortfall: Total < Min
+  if (totalIdentified < minQty) {
+      auditStatus = 'Shortfall';
+      discrepancyDisplay = minQty - totalIdentified;
+  } 
+  // [Calculation 3] Excess: Total > Max
+  else if (totalIdentified > maxQty) {
+      auditStatus = 'Excess';
+      discrepancyDisplay = totalIdentified - maxQty;
+  } 
+  // [Calculation 1] Match: Min <= Total <= Max
+  else {
+      auditStatus = 'Match';
+      discrepancyDisplay = 0;
+  }
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -87,9 +106,6 @@ function StaffDashboard({ user }) {
 
     try {
       const token = localStorage.getItem('token');
-      
-      // [CRITICAL CHANGE]: Concatenate Location + Hyphen + SKU
-      // Logic: "Noida WH" + "-" + "123456" -> "Noida WH-123456"
       const searchQuery = `${activeLocation}-${skuSearch}`.trim();
 
       const res = await axios.get(getApiUrl(`/api/inventory/lookup/${encodeURIComponent(searchQuery)}`), {
@@ -108,7 +124,6 @@ function StaffDashboard({ user }) {
 
     } catch (err) {
       console.error(err);
-      // Updated error message to show the hyphenated ID
       setMessage(`SKU "${activeLocation}-${skuSearch}" not found in Reference Database.`);
     } finally {
       setLoadingLookup(false);
@@ -124,7 +139,7 @@ function StaffDashboard({ user }) {
     try {
       const token = localStorage.getItem('token');
       const payload = {
-        skuId: lookupResult.skuId, // This is the full ID (e.g. Noida WH-123456)
+        skuId: lookupResult.skuId,
         skuName: lookupResult.name,
         location: activeLocation, 
         counts,
@@ -252,7 +267,7 @@ function StaffDashboard({ user }) {
                     </div>
                     <div className="flex justify-between items-center pt-3 border-t font-bold text-lg">
                       <span>Maximum (Sum):</span>
-                      <span className="text-indigo-600">{totalSystem}</span>
+                      <span className="text-indigo-600">{maxQty}</span>
                     </div>
                   </div>
                 </div>
@@ -262,7 +277,7 @@ function StaffDashboard({ user }) {
                 <div className="flex justify-between items-center mb-4">
                   <span className="text-xl font-bold">Audit Status: <span className={auditStatus === 'Match' ? 'text-green-600' : 'text-red-600'}>{auditStatus}</span></span>
                   {auditStatus !== 'Match' && (
-                     <span className="text-sm text-red-600 font-semibold">({Math.abs(discrepancy)} {auditStatus})</span>
+                     <span className="text-sm text-red-600 font-semibold">({discrepancyDisplay} {auditStatus})</span>
                   )}
                 </div>
 
