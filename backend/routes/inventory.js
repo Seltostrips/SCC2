@@ -6,21 +6,19 @@ const ReferenceInventory = require('../models/ReferenceInventory');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// 1. ROBUST LOOKUP [CHANGE 2: Include Previous Submission Info]
+// 1. ROBUST LOOKUP
 router.get('/lookup/:skuId', auth, async (req, res) => {
   try {
     const cleanSku = req.params.skuId.trim();
     let item = await ReferenceInventory.findOne({ skuId: cleanSku });
     
-    // Fuzzy matching logic
     if (!item && !isNaN(cleanSku)) item = await ReferenceInventory.findOne({ skuId: Number(cleanSku) });
     if (!item) item = await ReferenceInventory.findOne({ skuId: { $regex: new RegExp(`^${cleanSku}$`, 'i') } });
 
     if (!item) return res.status(404).json({ message: 'SKU not found' });
 
-    // [CHANGE 2] Check for ANY existing submission for this SKU
     const existingEntry = await Inventory.findOne({ skuId: item.skuId })
-        .sort({ 'timestamps.staffEntry': -1 }) // Get latest
+        .sort({ 'timestamps.staffEntry': -1 })
         .populate('staffId', 'name');
 
     const response = item.toObject();
@@ -39,7 +37,7 @@ router.get('/lookup/:skuId', auth, async (req, res) => {
   }
 });
 
-// 2. GET CLIENTS BY LOCATION (Unchanged)
+// 2. GET CLIENTS BY LOCATION
 router.get('/clients-by-location', auth, async (req, res) => {
   try {
     const { location } = req.query;
@@ -62,23 +60,17 @@ router.get('/clients-by-location', auth, async (req, res) => {
   }
 });
 
-// 3. STAFF HISTORY [CHANGE 3: Show Unique Latest SKUs]
+// 3. STAFF HISTORY
 router.get('/staff-history', auth, async (req, res) => {
   try {
-    // Aggregation to dedup SKUs and keep latest
     const entries = await Inventory.aggregate([
-        // Filter by current staff user
         { $match: { staffId: new mongoose.Types.ObjectId(req.user.id) } },
-        // Sort by date descending (Newest first)
         { $sort: { 'timestamps.staffEntry': -1 } },
-        // Group by SKU, taking the first (latest) document found
         { $group: {
             _id: "$skuId",
             doc: { $first: "$$ROOT" }
         }},
-        // Replace root to return clean documents
         { $replaceRoot: { newRoot: "$doc" } },
-        // Sort the final list by date again
         { $sort: { 'timestamps.staffEntry': -1 } }
     ]);
 
@@ -89,7 +81,7 @@ router.get('/staff-history', auth, async (req, res) => {
   }
 });
 
-// 4. CLIENT PENDING (Unchanged)
+// 4. CLIENT PENDING
 router.get('/pending', auth, async (req, res) => {
   try {
     const query = { status: 'pending-client' };
@@ -104,7 +96,7 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// 5. SUBMIT INVENTORY (Unchanged)
+// 5. SUBMIT INVENTORY (UPDATED LOGIC)
 router.post('/', auth, async (req, res) => {
   try {
     const { skuId, skuName, location, counts, odin, assignedClientId, notes } = req.body;
@@ -112,11 +104,23 @@ router.post('/', auth, async (req, res) => {
     const totalIdentified = 
         (Number(counts.picking)||0) + (Number(counts.bulk)||0) + (Number(counts.nearExpiry)||0) + 
         (Number(counts.jit)||0) + (Number(counts.damaged)||0);
-    const maxSystemQty = (Number(odin.minQuantity)||0) + (Number(odin.blocked)||0);
+    
+    // Updated Logic Variables
+    const minQty = Number(odin.minQuantity) || 0;
+    const blockedQty = Number(odin.blocked) || 0;
+    const maxQty = minQty + blockedQty;
 
     let auditResult = 'Match';
-    if (totalIdentified > maxSystemQty) auditResult = 'Excess';
-    else if (totalIdentified < maxSystemQty) auditResult = 'Shortfall';
+    
+    // [Calculation 2] Shortfall
+    if (totalIdentified < minQty) {
+        auditResult = 'Shortfall';
+    } 
+    // [Calculation 3] Excess
+    else if (totalIdentified > maxQty) {
+        auditResult = 'Excess';
+    } 
+    // [Calculation 1] Match (Default) covers minQty <= total <= maxQty
 
     let status = 'auto-approved';
     if (auditResult !== 'Match') status = 'pending-client';
@@ -124,7 +128,7 @@ router.post('/', auth, async (req, res) => {
     const newEntry = new Inventory({
       skuId, skuName, location,
       counts: { ...counts, totalIdentified },
-      odin: { ...odin, maxQuantity: maxSystemQty },
+      odin: { ...odin, maxQuantity: maxQty }, // Storing Max Sum in DB for ref
       auditResult, status,
       staffId: req.user.id,
       assignedClientId: (status === 'pending-client') ? assignedClientId : undefined,
@@ -146,7 +150,7 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// 6. RESPOND (Unchanged)
+// 6. RESPOND
 router.post('/:id/respond', auth, async (req, res) => {
   try {
     const { action, comment } = req.body;
