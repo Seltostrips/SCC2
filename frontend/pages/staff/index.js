@@ -13,7 +13,7 @@ function StaffDashboard({ user }) {
   const [notes, setNotes] = useState('');
   const [duplicateWarning, setDuplicateWarning] = useState(null);
   
-  // Detailed Counts
+  // Detailed Counts (Initialized as 0, but can hold strings like "1.5" during typing)
   const [counts, setCounts] = useState({
     picking: 0, bulk: 0, nearExpiry: 0, jit: 0, damaged: 0
   });
@@ -64,29 +64,29 @@ function StaffDashboard({ user }) {
     } catch (err) { console.error('Error fetching clients:', err); }
   };
 
-  // --- NEW CALCULATION LOGIC ---
+  // --- CHANGED: DECIMAL CALCULATION LOGIC ---
   const totalIdentified = 
-    (parseInt(counts.picking)||0) + (parseInt(counts.bulk)||0) + (parseInt(counts.nearExpiry)||0) + 
-    (parseInt(counts.jit)||0) + (parseInt(counts.damaged)||0);
+    (parseFloat(counts.picking)||0) + (parseFloat(counts.bulk)||0) + (parseFloat(counts.nearExpiry)||0) + 
+    (parseFloat(counts.jit)||0) + (parseFloat(counts.damaged)||0);
   
-  const minQty = parseInt(odinInputs.minQuantity)||0;
-  const blockedQty = parseInt(odinInputs.blocked)||0;
+  const minQty = parseFloat(odinInputs.minQuantity)||0;
+  const blockedQty = parseFloat(odinInputs.blocked)||0;
   const maxQty = minQty + blockedQty;
 
   let auditStatus = 'Match';
   let discrepancyDisplay = 0;
 
-  // [Calculation 2] Shortfall: Total < Min
+  // Logic: Precision rounding to avoid "0.0000001" errors in JS math
+  const round = (num) => Math.round(num * 100) / 100;
+
   if (totalIdentified < minQty) {
       auditStatus = 'Shortfall';
-      discrepancyDisplay = minQty - totalIdentified;
+      discrepancyDisplay = round(minQty - totalIdentified);
   } 
-  // [Calculation 3] Excess: Total > Max
   else if (totalIdentified > maxQty) {
       auditStatus = 'Excess';
-      discrepancyDisplay = totalIdentified - maxQty;
+      discrepancyDisplay = round(totalIdentified - maxQty);
   } 
-  // [Calculation 1] Match: Min <= Total <= Max
   else {
       auditStatus = 'Match';
       discrepancyDisplay = 0;
@@ -142,7 +142,7 @@ function StaffDashboard({ user }) {
         skuId: lookupResult.skuId,
         skuName: lookupResult.name,
         location: activeLocation, 
-        counts,
+        counts, // Sends raw values (strings or numbers), backend will cast them
         odin: odinInputs,
         assignedClientId: isObjection ? selectedClientId : null,
         notes
@@ -232,9 +232,11 @@ function StaffDashboard({ user }) {
                     {['picking', 'bulk', 'nearExpiry', 'jit', 'damaged'].map(field => (
                       <div key={field} className="flex justify-between items-center">
                         <label className="capitalize text-gray-600 w-1/2">{field.replace(/([A-Z])/g, ' $1').trim()}</label>
+                        {/* CHANGED: Removed parseInt, added step="any" */}
                         <input 
-                          type="number" min="0" value={counts[field]}
-                          onChange={e => setCounts({...counts, [field]: parseInt(e.target.value) || 0})}
+                          type="number" min="0" step="any"
+                          value={counts[field]}
+                          onChange={e => setCounts({...counts, [field]: e.target.value})}
                           className="w-24 p-2 border rounded text-right font-mono"
                         />
                       </div>
@@ -251,17 +253,21 @@ function StaffDashboard({ user }) {
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <label className="text-gray-600 w-1/2">Qty per ODIN (Min)</label>
+                      {/* CHANGED: Removed parseInt, added step="any" */}
                       <input 
-                        type="number" min="0" value={odinInputs.minQuantity}
-                        onChange={e => setOdinInputs({...odinInputs, minQuantity: parseInt(e.target.value) || 0})}
+                        type="number" min="0" step="any"
+                        value={odinInputs.minQuantity}
+                        onChange={e => setOdinInputs({...odinInputs, minQuantity: e.target.value})}
                         className="w-24 p-2 border rounded text-right font-mono"
                       />
                     </div>
                     <div className="flex justify-between items-center">
                       <label className="text-gray-600 w-1/2">Blocked Qty</label>
+                      {/* CHANGED: Removed parseInt, added step="any" */}
                       <input 
-                        type="number" min="0" value={odinInputs.blocked}
-                        onChange={e => setOdinInputs({...odinInputs, blocked: parseInt(e.target.value) || 0})}
+                        type="number" min="0" step="any"
+                        value={odinInputs.blocked}
+                        onChange={e => setOdinInputs({...odinInputs, blocked: e.target.value})}
                         className="w-24 p-2 border rounded text-right font-mono"
                       />
                     </div>
