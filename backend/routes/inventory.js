@@ -96,11 +96,12 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// 5. SUBMIT INVENTORY (UPDATED LOGIC)
+// 5. SUBMIT INVENTORY (UPDATED LOGIC with Decimals)
 router.post('/', auth, async (req, res) => {
   try {
     const { skuId, skuName, location, counts, odin, assignedClientId, notes } = req.body;
 
+    // Use Number() to support floats (decimals)
     const totalIdentified = 
         (Number(counts.picking)||0) + (Number(counts.bulk)||0) + (Number(counts.nearExpiry)||0) + 
         (Number(counts.jit)||0) + (Number(counts.damaged)||0);
@@ -128,7 +129,7 @@ router.post('/', auth, async (req, res) => {
     const newEntry = new Inventory({
       skuId, skuName, location,
       counts: { ...counts, totalIdentified },
-      odin: { ...odin, maxQuantity: maxQty }, // Storing Max Sum in DB for ref
+      odin: { ...odin, maxQuantity: maxQty },
       auditResult, status,
       staffId: req.user.id,
       assignedClientId: (status === 'pending-client') ? assignedClientId : undefined,
