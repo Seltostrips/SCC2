@@ -36,13 +36,13 @@ function AdminDashboard() {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        // --- UI FILTER LOGIC ---
+        // --- 1. CALCULATE ATTEMPTS ---
         const rawData = [...res.data];
         
-        // 1. Sort Ascending (Oldest -> Newest)
+        // Sort Ascending (Oldest -> Newest)
         rawData.sort((a, b) => new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime());
 
-        // 2. Group by SKU
+        // Group by SKU
         const groups = {};
         rawData.forEach(item => {
             const id = item.skuId || 'unknown';
@@ -50,7 +50,7 @@ function AdminDashboard() {
             groups[id].push(item);
         });
 
-        // 3. Assign Labels
+        // Assign Labels
         const processed = [];
         Object.values(groups).forEach(group => {
             group.forEach((item, index) => {
@@ -60,7 +60,7 @@ function AdminDashboard() {
             });
         });
 
-        // 4. Sort Descending
+        // Sort Descending (Newest First) for Table
         processed.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
 
         setInventory(processed);
@@ -76,14 +76,16 @@ function AdminDashboard() {
     }
   };
 
-  // -- DOWNLOAD REPORT --
+  // -- DOWNLOAD REPORT (With All New Columns) --
   const handleDownloadReport = () => {
     if (inventory.length === 0) return alert('No data to download');
 
     const sortedForCsv = [...inventory].sort((a, b) => {
         const dateA = new Date(a.dateSubmitted).getTime();
         const dateB = new Date(b.dateSubmitted).getTime();
+        // Primary Sort: Date (Newest first)
         if (dateB !== dateA) return dateB - dateA;
+        // Secondary Sort: SKU ID
         return (a.skuId || '').localeCompare(b.skuId || '');
     });
 
@@ -93,13 +95,24 @@ function AdminDashboard() {
         'Attempt': item.attemptLabel || 'Final',
         'Picking Location': item.pickingLocation,
         'Bulk Location': item.bulkLocation,
-        'Quantity as per Odin (Min)': item.odinMin,
+        
+        // --- NEW COLUMNS START ---
+        'Picking': item.countPicking,
+        'Bulk': item.countBulk,
+        'Near Expiry': item.countNearExpiry,
+        'JIT': item.countJit,
+        'Damaged': item.countDamaged,
+        'Total Identified': item.physicalCount,
+        'Min Quantity': item.odinMin,
+        'Blocked': item.odinBlocked,
+        'Max Quantity': item.odinMax,
+        // --- NEW COLUMNS END ---
+
         'Staff Name': item.staffName,
         'Status': item.status,
         'Client Name': item.clientName !== '-' ? item.clientName : '',
         'comments by client': item.clientComment !== '-' ? item.clientComment : '',
         'Audit Result': item.auditResult,
-        'Physical Count': item.physicalCount,
         'Discrepancy': item.physicalCount - item.odinMax,
         'Date Submitted': new Date(item.dateSubmitted).toLocaleString()
     }));
