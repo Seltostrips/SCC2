@@ -16,7 +16,7 @@ router.get('/users', auth, async (req, res) => {
   }
 });
 
-// 2. GET ALL INVENTORY (Report Aggregation)
+// 2. GET ALL INVENTORY (Updated for Detailed CSV)
 router.get('/inventory-all', auth, async (req, res) => {
   try {
     const entries = await Inventory.aggregate([
@@ -59,9 +59,20 @@ router.get('/inventory-all', auth, async (req, res) => {
         pickingLocation: ref.pickingLocation || entry.location || '-',
         bulkLocation: ref.bulkLocation || '-',
         submittedLocation: entry.location,
+        
+        // --- Detailed ODIN Data ---
         odinMin: entry.odin?.minQuantity || 0,
+        odinBlocked: entry.odin?.blocked || 0, // NEW
         odinMax: entry.odin?.maxQuantity || 0,
+        
+        // --- Detailed Counts Data ---
+        countPicking: entry.counts?.picking || 0, // NEW
+        countBulk: entry.counts?.bulk || 0,       // NEW
+        countNearExpiry: entry.counts?.nearExpiry || 0, // NEW
+        countJit: entry.counts?.jit || 0,         // NEW
+        countDamaged: entry.counts?.damaged || 0, // NEW
         physicalCount: entry.counts?.totalIdentified || 0,
+
         staffName: staff.name || 'Unknown',
         clientName: client.name || '-',
         status: entry.status,
@@ -160,7 +171,7 @@ router.post('/assign-client', auth, async (req, res) => {
   }
 });
 
-// --- NEW DELETE ROUTES ---
+// --- DANGER ZONE ROUTES ---
 
 // 6. DELETE ALL STAFF
 router.delete('/delete-all-staff', auth, async (req, res) => {
