@@ -16,23 +16,36 @@ router.get('/users', auth, async (req, res) => {
   }
 });
 
-// 2. GET INVENTORY (OPTIMIZED PERFORMANCE)
+// 2. GET INVENTORY (OPTIMIZED + DATE FILTER)
 router.get('/inventory-all', auth, async (req, res) => {
   try {
-    const { limit } = req.query; // Support for limiting results
+    const { limit, startDate, endDate } = req.query; 
 
-    // OPTIMIZATION: Pipeline Order is Critical
-    const pipeline = [
-      // 1. Sort FIRST (Cheapest operation to determine order)
-      { $sort: { 'timestamps.staffEntry': -1 } }
-    ];
+    const pipeline = [];
 
-    // 2. Limit if requested (Drastically reduces memory usage for Monitor Tab)
+    // 1. DATE FILTER (Apply first for performance)
+    if (startDate || endDate) {
+        const dateQuery = {};
+        if (startDate) {
+            dateQuery.$gte = new Date(startDate); // Start of day (00:00:00)
+        }
+        if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999); // End of day (23:59:59)
+            dateQuery.$lte = end;
+        }
+        pipeline.push({ $match: { 'timestamps.staffEntry': dateQuery } });
+    }
+
+    // 2. Sort (Newest first)
+    pipeline.push({ $sort: { 'timestamps.staffEntry': -1 } });
+
+    // 3. Limit (Optional, used for Monitor View)
     if (limit) {
         pipeline.push({ $limit: parseInt(limit) });
     }
 
-    // 3. Lookups (Expensive joins - only done on the limited set now)
+    // 4. Lookups (Expensive joins)
     pipeline.push(
       {
         $lookup: {
