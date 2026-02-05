@@ -12,6 +12,7 @@ function AdminDashboard() {
   const [uploadType, setUploadType] = useState('inventory');
   const [uploadStatus, setUploadStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false); // New State
 
   // Edit State
   const [editingUser, setEditingUser] = useState(null);
@@ -32,19 +33,63 @@ function AdminDashboard() {
     const token = localStorage.getItem('token');
     try {
       if (activeTab === 'monitor') {
-        const res = await axios.get(getApiUrl('/api/admin/inventory-all'), {
+        // [OPTIMIZATION]: Only fetch last 300 items for the UI to prevent crashing
+        const res = await axios.get(getApiUrl('/api/admin/inventory-all?limit=300'), {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        // --- 1. CALCULATE ATTEMPTS ---
-        const rawData = [...res.data];
+        // UI ATTEMPT LOGIC (Simplified for View Only)
+        // Since we only have 300, we just show them. 
+        // Note: 'Attempt' calculation works best on full history, so in this 'Recent View',
+        // we might see 'Final' mostly. This is expected for a performance view.
         
-        // Sort Ascending (Oldest -> Newest)
-        rawData.sort((a, b) => new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime());
+        const rawData = [...res.data];
+        // Ensure sorted by date descending for the table
+        rawData.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
+        
+        // Simple "Latest" tag logic for the UI view
+        // (We won't do full historical grouping here to save browser memory)
+        const processed = rawData.map(item => ({
+            ...item,
+            attemptLabel: 'View' // Placeholder for UI, CSV will have full logic
+        }));
 
-        // Group by SKU
+        setInventory(processed);
+
+      } else if (activeTab === 'users') {
+        const res = await axios.get(getApiUrl('/api/admin/users'), { 
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setUsers(res.data);
+      }
+    } catch (err) {
+      console.error("Error fetching data", err);
+    }
+  };
+
+  // -- DOWNLOAD REPORT (Fetches FULL History) --
+  const handleDownloadReport = async () => {
+    setDownloading(true);
+    const token = localStorage.getItem('token');
+
+    try {
+        // 1. Fetch FULL Data (No limit) specifically for download
+        const res = await axios.get(getApiUrl('/api/admin/inventory-all'), {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const fullData = res.data;
+
+        if (fullData.length === 0) {
+            setDownloading(false);
+            return alert('No data to download');
+        }
+
+        // 2. Calculate "Attempt" Logic on Full Dataset
+        // Sort Ascending (Oldest -> Newest)
+        fullData.sort((a, b) => new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime());
+
         const groups = {};
-        rawData.forEach(item => {
+        fullData.forEach(item => {
             const id = item.skuId || 'unknown';
             if (!groups[id]) groups[id] = [];
             groups[id].push(item);
@@ -60,71 +105,52 @@ function AdminDashboard() {
             });
         });
 
-        // Sort Descending (Newest First) for Table
+        // Sort Descending for CSV
         processed.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
 
-        setInventory(processed);
+        // 3. Map Columns
+        const csvData = processed.map(item => ({
+            'SKU ID': item.skuId,
+            'Name': item.skuName,
+            'Attempt': item.attemptLabel,
+            'Picking Location': item.pickingLocation,
+            'Bulk Location': item.bulkLocation,
+            
+            'Picking': item.countPicking,
+            'Bulk': item.countBulk,
+            'Near Expiry': item.countNearExpiry,
+            'JIT': item.countJit,
+            'Damaged': item.countDamaged,
+            'Total Identified': item.physicalCount,
+            'Min Quantity': item.odinMin,
+            'Blocked': item.odinBlocked,
+            'Max Quantity': item.odinMax,
 
-      } else if (activeTab === 'users') {
-        const res = await axios.get(getApiUrl('/api/admin/users'), { 
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setUsers(res.data);
-      }
+            'Staff Name': item.staffName,
+            'Status': item.status,
+            'Client Name': item.clientName !== '-' ? item.clientName : '',
+            'comments by client': item.clientComment !== '-' ? item.clientComment : '',
+            'Audit Result': item.auditResult,
+            'Discrepancy': item.physicalCount - item.odinMax,
+            'Date Submitted': new Date(item.dateSubmitted).toLocaleString()
+        }));
+
+        // 4. Generate & Download
+        const csv = Papa.unparse(csvData);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute('download', `Audit_Report_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
     } catch (err) {
-      console.error("Error fetching data", err);
+        console.error("Download Error:", err);
+        alert("Failed to download report. Dataset might be too large.");
+    } finally {
+        setDownloading(false);
     }
-  };
-
-  // -- DOWNLOAD REPORT (With All New Columns) --
-  const handleDownloadReport = () => {
-    if (inventory.length === 0) return alert('No data to download');
-
-    const sortedForCsv = [...inventory].sort((a, b) => {
-        const dateA = new Date(a.dateSubmitted).getTime();
-        const dateB = new Date(b.dateSubmitted).getTime();
-        // Primary Sort: Date (Newest first)
-        if (dateB !== dateA) return dateB - dateA;
-        // Secondary Sort: SKU ID
-        return (a.skuId || '').localeCompare(b.skuId || '');
-    });
-
-    const csvData = sortedForCsv.map(item => ({
-        'SKU ID': item.skuId,
-        'Name': item.skuName,
-        'Attempt': item.attemptLabel || 'Final',
-        'Picking Location': item.pickingLocation,
-        'Bulk Location': item.bulkLocation,
-        
-        // --- NEW COLUMNS START ---
-        'Picking': item.countPicking,
-        'Bulk': item.countBulk,
-        'Near Expiry': item.countNearExpiry,
-        'JIT': item.countJit,
-        'Damaged': item.countDamaged,
-        'Total Identified': item.physicalCount,
-        'Min Quantity': item.odinMin,
-        'Blocked': item.odinBlocked,
-        'Max Quantity': item.odinMax,
-        // --- NEW COLUMNS END ---
-
-        'Staff Name': item.staffName,
-        'Status': item.status,
-        'Client Name': item.clientName !== '-' ? item.clientName : '',
-        'comments by client': item.clientComment !== '-' ? item.clientComment : '',
-        'Audit Result': item.auditResult,
-        'Discrepancy': item.physicalCount - item.odinMax,
-        'Date Submitted': new Date(item.dateSubmitted).toLocaleString()
-    }));
-
-    const csv = Papa.unparse(csvData);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', `Audit_Report_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   // -- EDIT USER LOGIC --
@@ -290,8 +316,12 @@ function AdminDashboard() {
               <div className="px-4 py-5 sm:px-6 flex justify-between items-center">
                 <h3 className="text-lg leading-6 font-medium text-gray-900">Live Inventory Submissions</h3>
                 <div className="space-x-3">
-                    <button onClick={handleDownloadReport} className="text-white bg-green-600 hover:bg-green-700 px-3 py-2 rounded text-sm font-bold shadow">
-                       Download Report (CSV)
+                    <button 
+                        onClick={handleDownloadReport} 
+                        disabled={downloading}
+                        className={`text-white px-3 py-2 rounded text-sm font-bold shadow ${downloading ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'}`}
+                    >
+                       {downloading ? 'Downloading...' : 'Download Report (CSV)'}
                     </button>
                     <button onClick={fetchData} className="text-indigo-600 hover:text-indigo-900 text-sm font-medium">Refresh</button>
                 </div>
@@ -308,8 +338,8 @@ function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {/* Only show 'Final' entries in the table view */}
-                    {inventory.filter(i => i.attemptLabel === 'Final').map((item) => (
+                    {/* The table only shows the loaded (recent) items */}
+                    {inventory.map((item) => (
                       <tr key={item._id}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.skuId}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -319,7 +349,9 @@ function AdminDashboard() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.staffName}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold bg-gray-50">
-                            {item.attemptLabel}
+                            {/* In Limit view, we just show placeholder or calculate locally if possible */}
+                            {/* Since this is the 'Monitor' tab, accuracy of history # matters less than Recency */}
+                            View
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono font-bold">
                            {item.physicalCount - item.odinMax}
