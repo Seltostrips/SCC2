@@ -8,11 +8,14 @@ function AdminDashboard() {
   const [inventory, setInventory] = useState([]);
   const [users, setUsers] = useState([]);
   
+  // Date Filter State for Download
+  const [downloadDateRange, setDownloadDateRange] = useState({ start: '', end: '' });
+
   // Upload State
   const [uploadType, setUploadType] = useState('inventory');
   const [uploadStatus, setUploadStatus] = useState('');
   const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false); // New State
+  const [downloading, setDownloading] = useState(false);
 
   // Edit State
   const [editingUser, setEditingUser] = useState(null);
@@ -33,25 +36,18 @@ function AdminDashboard() {
     const token = localStorage.getItem('token');
     try {
       if (activeTab === 'monitor') {
-        // [OPTIMIZATION]: Only fetch last 300 items for the UI to prevent crashing
+        // Only fetch last 300 for UI performance
         const res = await axios.get(getApiUrl('/api/admin/inventory-all?limit=300'), {
           headers: { Authorization: `Bearer ${token}` }
         });
         
-        // UI ATTEMPT LOGIC (Simplified for View Only)
-        // Since we only have 300, we just show them. 
-        // Note: 'Attempt' calculation works best on full history, so in this 'Recent View',
-        // we might see 'Final' mostly. This is expected for a performance view.
-        
         const rawData = [...res.data];
-        // Ensure sorted by date descending for the table
+        // Sort Date Descending for View
         rawData.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
         
-        // Simple "Latest" tag logic for the UI view
-        // (We won't do full historical grouping here to save browser memory)
         const processed = rawData.map(item => ({
             ...item,
-            attemptLabel: 'View' // Placeholder for UI, CSV will have full logic
+            attemptLabel: 'View' 
         }));
 
         setInventory(processed);
@@ -67,25 +63,29 @@ function AdminDashboard() {
     }
   };
 
-  // -- DOWNLOAD REPORT (Fetches FULL History) --
+  // -- DOWNLOAD REPORT (With Date Range) --
   const handleDownloadReport = async () => {
     setDownloading(true);
     const token = localStorage.getItem('token');
 
     try {
-        // 1. Fetch FULL Data (No limit) specifically for download
-        const res = await axios.get(getApiUrl('/api/admin/inventory-all'), {
+        // Construct Query with Date Filters
+        const params = new URLSearchParams();
+        if (downloadDateRange.start) params.append('startDate', downloadDateRange.start);
+        if (downloadDateRange.end) params.append('endDate', downloadDateRange.end);
+        
+        // Fetch FULL Data (filtered by date if selected)
+        const res = await axios.get(getApiUrl(`/api/admin/inventory-all?${params.toString()}`), {
             headers: { Authorization: `Bearer ${token}` }
         });
         const fullData = res.data;
 
         if (fullData.length === 0) {
             setDownloading(false);
-            return alert('No data to download');
+            return alert('No data found for the selected range.');
         }
 
-        // 2. Calculate "Attempt" Logic on Full Dataset
-        // Sort Ascending (Oldest -> Newest)
+        // --- Calculate Attempt Logic ---
         fullData.sort((a, b) => new Date(a.dateSubmitted).getTime() - new Date(b.dateSubmitted).getTime());
 
         const groups = {};
@@ -95,7 +95,6 @@ function AdminDashboard() {
             groups[id].push(item);
         });
 
-        // Assign Labels
         const processed = [];
         Object.values(groups).forEach(group => {
             group.forEach((item, index) => {
@@ -108,14 +107,13 @@ function AdminDashboard() {
         // Sort Descending for CSV
         processed.sort((a, b) => new Date(b.dateSubmitted).getTime() - new Date(a.dateSubmitted).getTime());
 
-        // 3. Map Columns
+        // Map Columns
         const csvData = processed.map(item => ({
             'SKU ID': item.skuId,
             'Name': item.skuName,
             'Attempt': item.attemptLabel,
             'Picking Location': item.pickingLocation,
             'Bulk Location': item.bulkLocation,
-            
             'Picking': item.countPicking,
             'Bulk': item.countBulk,
             'Near Expiry': item.countNearExpiry,
@@ -125,7 +123,6 @@ function AdminDashboard() {
             'Min Quantity': item.odinMin,
             'Blocked': item.odinBlocked,
             'Max Quantity': item.odinMax,
-
             'Staff Name': item.staffName,
             'Status': item.status,
             'Client Name': item.clientName !== '-' ? item.clientName : '',
@@ -135,7 +132,6 @@ function AdminDashboard() {
             'Date Submitted': new Date(item.dateSubmitted).toLocaleString()
         }));
 
-        // 4. Generate & Download
         const csv = Papa.unparse(csvData);
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
@@ -147,7 +143,7 @@ function AdminDashboard() {
 
     } catch (err) {
         console.error("Download Error:", err);
-        alert("Failed to download report. Dataset might be too large.");
+        alert("Failed to download report.");
     } finally {
         setDownloading(false);
     }
@@ -211,7 +207,6 @@ function AdminDashboard() {
       complete: async (results) => {
         const token = localStorage.getItem('token');
         const rows = results.data;
-        
         try {
             if (uploadType === 'inventory') {
                  const payload = rows.map(row => ({
@@ -221,7 +216,6 @@ function AdminDashboard() {
                     bulkLocation: row['bulkLocation'] || row['Bulk Location'],
                     systemQuantity: parseFloat(row['systemQuantity'] || row['Quantity as on the date of Sampling'] || 0)
                  })).filter(i => i.skuId);
-
                  await axios.post(getApiUrl('/api/admin/upload-inventory'), payload, {
                     headers: { Authorization: `Bearer ${token}` }
                  });
@@ -240,7 +234,6 @@ function AdminDashboard() {
                        mappedLocation: locArray.join(', ')
                    };
                }).filter(u => u.uniqueCode);
-
                const endpoint = uploadType === 'staff' ? '/api/admin/assign-staff' : '/api/admin/assign-client';
                await axios.post(getApiUrl(endpoint), payload, { headers: { Authorization: `Bearer ${token}` } });
                setUploadStatus(`Success! Updated ${payload.length} ${uploadType}s.`);
@@ -261,7 +254,6 @@ function AdminDashboard() {
   const handleDeleteAll = async (type) => {
       let endpoint = '';
       let warning = '';
-      
       if (type === 'staff') {
           endpoint = '/api/admin/delete-all-staff';
           warning = '⚠️ ARE YOU SURE? This will delete ALL Staff accounts permanently!';
@@ -272,9 +264,7 @@ function AdminDashboard() {
           endpoint = '/api/admin/delete-all-reference-inventory';
           warning = '⚠️ ARE YOU SURE? This will delete ALL Uploaded Inventory Reference Data!';
       }
-
       if (!confirm(warning)) return;
-
       try {
           const token = localStorage.getItem('token');
           const res = await axios.delete(getApiUrl(endpoint), {
@@ -313,15 +303,34 @@ function AdminDashboard() {
           {/* TAB 1: MONITOR */}
           {activeTab === 'monitor' && (
             <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-              <div className="px-4 py-5 sm:px-6 flex justify-between items-center">
+              <div className="px-4 py-5 sm:px-6 flex flex-col md:flex-row justify-between items-center gap-4">
                 <h3 className="text-lg leading-6 font-medium text-gray-900">Live Inventory Submissions</h3>
-                <div className="space-x-3">
+                
+                {/* DATE FILTER & DOWNLOAD ACTIONS */}
+                <div className="flex flex-col md:flex-row items-center gap-3">
+                    <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 p-2 rounded border">
+                        <span className="font-bold">Date Range:</span>
+                        <input 
+                            type="date" 
+                            className="border rounded p-1"
+                            value={downloadDateRange.start}
+                            onChange={(e) => setDownloadDateRange({...downloadDateRange, start: e.target.value})}
+                        />
+                        <span>to</span>
+                        <input 
+                            type="date" 
+                            className="border rounded p-1"
+                            value={downloadDateRange.end}
+                            onChange={(e) => setDownloadDateRange({...downloadDateRange, end: e.target.value})}
+                        />
+                    </div>
+
                     <button 
                         onClick={handleDownloadReport} 
                         disabled={downloading}
                         className={`text-white px-3 py-2 rounded text-sm font-bold shadow ${downloading ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'}`}
                     >
-                       {downloading ? 'Downloading...' : 'Download Report (CSV)'}
+                       {downloading ? 'Downloading...' : 'Download CSV'}
                     </button>
                     <button onClick={fetchData} className="text-indigo-600 hover:text-indigo-900 text-sm font-medium">Refresh</button>
                 </div>
@@ -338,7 +347,7 @@ function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {/* The table only shows the loaded (recent) items */}
+                    {/* Monitor View only shows latest fetched items (limited) */}
                     {inventory.map((item) => (
                       <tr key={item._id}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.skuId}</td>
@@ -349,8 +358,6 @@ function AdminDashboard() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.staffName}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold bg-gray-50">
-                            {/* In Limit view, we just show placeholder or calculate locally if possible */}
-                            {/* Since this is the 'Monitor' tab, accuracy of history # matters less than Recency */}
                             View
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono font-bold">
