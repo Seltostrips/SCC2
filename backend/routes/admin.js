@@ -5,7 +5,7 @@ const Inventory = require('../models/Inventory');
 const ReferenceInventory = require('../models/ReferenceInventory');
 const auth = require('../middleware/auth');
 
-// 1. GET ALL USERS (Restored)
+// 1. GET ALL USERS
 router.get('/users', auth, async (req, res) => {
   try {
     const users = await User.find().select('-password').sort({ createdAt: -1 });
@@ -16,10 +16,24 @@ router.get('/users', auth, async (req, res) => {
   }
 });
 
-// 2. GET ALL INVENTORY (Updated for Detailed CSV)
+// 2. GET INVENTORY (OPTIMIZED PERFORMANCE)
 router.get('/inventory-all', auth, async (req, res) => {
   try {
-    const entries = await Inventory.aggregate([
+    const { limit } = req.query; // Support for limiting results
+
+    // OPTIMIZATION: Pipeline Order is Critical
+    const pipeline = [
+      // 1. Sort FIRST (Cheapest operation to determine order)
+      { $sort: { 'timestamps.staffEntry': -1 } }
+    ];
+
+    // 2. Limit if requested (Drastically reduces memory usage for Monitor Tab)
+    if (limit) {
+        pipeline.push({ $limit: parseInt(limit) });
+    }
+
+    // 3. Lookups (Expensive joins - only done on the limited set now)
+    pipeline.push(
       {
         $lookup: {
           from: 'users',
@@ -43,9 +57,10 @@ router.get('/inventory-all', auth, async (req, res) => {
           foreignField: 'skuId',
           as: 'refDetails'
         }
-      },
-      { $sort: { 'timestamps.staffEntry': -1 } }
-    ]);
+      }
+    );
+
+    const entries = await Inventory.aggregate(pipeline);
 
     const formatted = entries.map(entry => {
       const staff = entry.staffDetails[0] || {};
@@ -60,17 +75,17 @@ router.get('/inventory-all', auth, async (req, res) => {
         bulkLocation: ref.bulkLocation || '-',
         submittedLocation: entry.location,
         
-        // --- Detailed ODIN Data ---
+        // Detailed ODIN Data
         odinMin: entry.odin?.minQuantity || 0,
-        odinBlocked: entry.odin?.blocked || 0, // NEW
+        odinBlocked: entry.odin?.blocked || 0,
         odinMax: entry.odin?.maxQuantity || 0,
         
-        // --- Detailed Counts Data ---
-        countPicking: entry.counts?.picking || 0, // NEW
-        countBulk: entry.counts?.bulk || 0,       // NEW
-        countNearExpiry: entry.counts?.nearExpiry || 0, // NEW
-        countJit: entry.counts?.jit || 0,         // NEW
-        countDamaged: entry.counts?.damaged || 0, // NEW
+        // Detailed Counts Data
+        countPicking: entry.counts?.picking || 0,
+        countBulk: entry.counts?.bulk || 0,
+        countNearExpiry: entry.counts?.nearExpiry || 0,
+        countJit: entry.counts?.jit || 0,
+        countDamaged: entry.counts?.damaged || 0,
         physicalCount: entry.counts?.totalIdentified || 0,
 
         staffName: staff.name || 'Unknown',
@@ -84,7 +99,7 @@ router.get('/inventory-all', auth, async (req, res) => {
 
     res.json(formatted);
   } catch (err) {
-    console.error(err);
+    console.error('Admin Inventory Error:', err);
     res.status(500).send('Server Error');
   }
 });
@@ -170,8 +185,6 @@ router.post('/assign-client', auth, async (req, res) => {
     res.status(500).send('Server Error');
   }
 });
-
-// --- DANGER ZONE ROUTES ---
 
 // 6. DELETE ALL STAFF
 router.delete('/delete-all-staff', auth, async (req, res) => {
